@@ -1,3 +1,7 @@
+---
+description: "Use when: 需要了解用户本机 VS Code Profile 体系（Base/Base->Dev/Base->Writing 等）、Profile 扩展明细、UUID、设置配置"
+---
+
 # VS Code Profile 体系 · 完整架构文档
 
 > 最后更新: 2026-07-17
