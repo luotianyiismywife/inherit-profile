@@ -95,6 +95,7 @@ import {
   sortSettings,
   splitRawSettingsByClosingBrace,
   stripInheritedExtensions,
+  stripInheritedSettingsBlocks,
   stripManagedProfileSettings,
   subtractSettings,
   convertOldMarkers,
@@ -530,6 +531,15 @@ export async function getProfileMap(
   // Add the custom profiles:
   let customProfiles: any[] = await getCustomProfiles(context);
   for (const profile of customProfiles) {
+    // 跳过内置 profile (如 VS Code 1.127+ 的 "Agents", location 形如
+    // "builtin/agents"), 它们的目录不在 User/profiles 下, 无法读取
+    // settings.json / extensions.json, 也不应参与继承体系。
+    if (profile.location && String(profile.location).startsWith("builtin/")) {
+      console.info(
+        `Skipping builtin profile \`${profile.name}\` (location: ${profile.location}).`,
+      );
+      continue;
+    }
     if (profile.name && profile.location) {
       map[profile.name] = path.join(
         userDirectory,
@@ -668,6 +678,9 @@ async function getInheritedSettings(
  * file.
  *
  * If no markers are found, the file is left unchanged.
+ *
+ * NOTE: Removes ALL inherited blocks, not just the first one — see
+ * {@link stripInheritedSettingsBlocks} for why that matters.
  */
 async function removeInheritedSettingsFromFile(
   settingsPath: string,
@@ -686,31 +699,22 @@ async function removeInheritedSettingsFromFile(
     return;
   }
 
-  const startIndex = raw.indexOf(INHERITED_SETTINGS_START_MARKER);
-  const endIndex = raw.indexOf(INHERITED_SETTINGS_END_MARKER);
+  const { cleaned: stripped, removedCount } =
+    stripInheritedSettingsBlocks(raw);
 
-  // Ensure the markers exist:
-  if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
-    if (startIndex !== endIndex) {
-      console.warn(
-        "Either the start or end marker is missing in the current profile.",
-      );
-    }
+  if (removedCount === 0) {
     return; // markers not found, leave file alone
   }
 
-  // Clean response:
-  const before = raw.slice(0, startIndex);
-  const after = removeInsertionBoundarySetting(
-    raw.slice(endIndex + INHERITED_SETTINGS_END_MARKER.length),
-  );
-  let cleaned = before.trimEnd() + after.trimEnd();
-
   // Ensure JSONC ends properly:
-  cleaned = removeTrailingComma(cleaned);
+  let cleaned = removeTrailingComma(stripped);
   if (!cleaned.endsWith("}")) {
     cleaned += "\n}";
   }
+
+  console.info(
+    `Removed ${removedCount} inherited settings block(s) from \`${settingsPath}\`.`,
+  );
 
   // Write cleaned file:
   await writeManagedFile(settingsPath, cleaned + "\n");

@@ -14,6 +14,7 @@ import {
   mergeInheritedExtensions,
   NON_FLATTENABLE_SETTINGS,
   removeTrailingComma,
+  stripInheritedSettingsBlocks,
   resolveParentSettingsPaths,
   resolveParentExtensionsPaths,
   sortSettings,
@@ -245,6 +246,75 @@ suite("profileSettings helpers", () => {
 }
 `,
     );
+  });
+
+  test("stripInheritedSettingsBlocks removes a single block", () => {
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(
+      `{
+    "own.setting": true,
+    // --- INHERITED SETTINGS MARKER START --- //
+    "inherited.setting": 1,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}
+`,
+    );
+    assert.strictEqual(removedCount, 1);
+    assert.ok(cleaned.includes('"own.setting": true'));
+    assert.ok(!cleaned.includes("MARKER"));
+    assert.ok(!cleaned.includes("_insertionBoundary"));
+  });
+
+  test("stripInheritedSettingsBlocks removes ALL stacked blocks", () => {
+    const block =
+      `    // --- INHERITED SETTINGS MARKER START --- //\n` +
+      `    "dup.setting": 1,\n` +
+      `    // --- INHERITED SETTINGS MARKER END --- //\n` +
+      `    "inheritProfile._insertionBoundary": false,\n`;
+    // Two stacked blocks (the historical file-growth bug).
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(
+      `{
+    "own.setting": true,
+${block}${block}}
+`,
+    );
+    assert.strictEqual(removedCount, 2);
+    assert.ok(cleaned.includes('"own.setting": true'));
+    assert.ok(!cleaned.includes("MARKER"));
+    assert.ok(!cleaned.includes("_insertionBoundary"));
+  });
+
+  test("stripInheritedSettingsBlocks leaves file unchanged when no markers exist", () => {
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(
+      `{
+    "own.setting": true
+}
+`,
+    );
+    assert.strictEqual(removedCount, 0);
+    assert.strictEqual(cleaned, `{
+    "own.setting": true
+}
+`);
+  });
+
+  test("stripInheritedSettingsBlocks stops at an invalid marker order", () => {
+    // END before START (e.g. after a VS Code rewrite lost the START marker).
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(
+      `{
+    "own.setting": true,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "orphan": 1
+}
+`,
+    );
+    assert.strictEqual(removedCount, 0);
+    assert.strictEqual(cleaned, `{
+    "own.setting": true,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "orphan": 1
+}
+`);
   });
 
   test("findTabValue detects tabs and falls back to four spaces", () => {

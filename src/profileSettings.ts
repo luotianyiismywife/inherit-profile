@@ -559,6 +559,49 @@ export function removeInsertionBoundarySetting(after: string): string {
 }
 
 /**
+ * Removes ALL inherited settings blocks (start marker → end marker, plus the
+ * insertion boundary setting) from a raw settings file string.
+ *
+ * Unlike a single-pass removal, this loops until no valid marker pair remains.
+ * Historical bugs (e.g. VS Code rewriting the file mid-sync) could leave
+ * multiple stacked blocks behind; a single-pass removal would leave the rest,
+ * and the next sync would add yet another block on top, causing unbounded
+ * file growth.
+ *
+ * If a marker pair is invalid (END appears before START, or only one marker
+ * exists), removal stops and the file is left as-is from that point on.
+ *
+ * @param raw Raw settings.json content.
+ * @returns The cleaned content and how many blocks were removed.
+ */
+export function stripInheritedSettingsBlocks(raw: string): {
+  cleaned: string;
+  removedCount: number;
+} {
+  let cleaned = raw;
+  let removedCount = 0;
+
+  while (true) {
+    const startIndex = cleaned.indexOf(INHERITED_SETTINGS_START_MARKER);
+    const endIndex = cleaned.indexOf(INHERITED_SETTINGS_END_MARKER);
+
+    // No markers left, or markers are in an invalid order — stop.
+    if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+      break;
+    }
+
+    const before = cleaned.slice(0, startIndex);
+    const after = removeInsertionBoundarySetting(
+      cleaned.slice(endIndex + INHERITED_SETTINGS_END_MARKER.length),
+    );
+    cleaned = before.trimEnd() + after.trimEnd();
+    removedCount++;
+  }
+
+  return { cleaned, removedCount };
+}
+
+/**
  * Removes the last trailing comma from a JSONC (JSON with Comments) string.
  * It correctly handles single-line, multi-line, and comments within strings.
  * A trailing comma is defined as a comma that is the last meaningful character,
