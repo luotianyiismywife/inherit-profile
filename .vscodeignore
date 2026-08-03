@@ -11,3 +11,8 @@ vsc-extension-quickstart.md
 **/*.ts
 **/.vscode-test.*
 !node_modules/sql.js/dist/sql-wasm.wasm
+scripts/**
+out-test/**
+.copilot/**
+.github/**
+vscode配置文件及其配置明细(开发者自用).md
