@@ -31,6 +31,7 @@ description: "Use when: 检查 VS Code 新版本兼容性、更新 engines.vscod
 |------|------|---------|
 | `结构.instructions.md` | src 源码结构、模块职责、函数清单、继承/重建流程 | **每次修改 src/ 下源码文件后** |
 | `Dependencies of the plugin.instructions.md` | VS Code 内部结构/API/npm 依赖清单 | **每次 VS Code 大版本更新后** |
+| `vscode开发经验.instructions.md` | 浏览器自动化操作（市场上传/GitHub Release）、MCP 配置与排障、文档同步约定 | **现实环境变化后**（市场版本、MCP、Profile 结构、浏览器流程变化等） |
 
 > ℹ️ `vscode配置文件及其配置明细(开发者自用).md`（项目根目录）是开发者个人配置文件清单，**不属于** `.copilot/instructions/` 项目文档，无需 Copilot 自动加载，也不要移入。
 
