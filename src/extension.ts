@@ -228,17 +228,19 @@ async function checkAndRestoreMarkers(context: vscode.ExtensionContext): Promise
 }
 
 /**
- * 确保 `settingsSync.ignoredSettings` 包含本扩展管理的全部扁平 key。
+ * 确保 `settingsSync.ignoredSettings` 包含本扩展管理的全部 key（含嵌套形式）。
  *
- * 原因：VS Code Settings Sync 按**顶层 key** 合并设置。只要 settings.json 里
- * 存在嵌套的 `inheritProfile` 对象，Sync 就把 `inheritProfile` 当成一个节点
- * 整体管理，下载时用云端版本覆盖本地 → parents/元数据被删除。
+ * 原因：VS Code Settings Sync 按**顶层 key** 合并设置（`settingsMerge.compare`
+ * 用 `Object.keys` 取顶层 key 与 ignored 列表精确匹配）。只要 settings.json 里
+ * 存在嵌套的 `inheritProfile` 对象（Sync 云端快照的历史格式），顶层 key 就是
+ * `inheritProfile` 一个；若是扁平 key 形式，顶层 key 是 `inheritProfile.parents`
+ * 等。两种形态都要加入 ignored，Sync 下载时才会保留本地值、永不覆盖。
  *
- * 解决：所有继承元数据都用**扁平 key**（无嵌套对象），并把它们加入
- * `settingsSync.ignoredSettings`——Sync 对 ignored 的 key 下载时保留本地值，
- * 永不覆盖。幂等：已包含则跳过。
+ * 注意：`inheritProfile` 嵌套形式必须单独加——只加扁平 key 时，若文件被 Sync
+ * 写回成嵌套对象，ignored 匹配不到（顶层 key 是 `inheritProfile` 而非扁平 key）。
  */
 const INHERIT_PROFILE_SYNC_KEYS = [
+  "inheritProfile",                                    // 嵌套形式（Sync 云端历史格式）
   "inheritProfile.parents",
   "inheritProfile._originallyOwnExtensions",
   "inheritProfile.optedOutExtensions",
