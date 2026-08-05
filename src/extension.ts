@@ -39,7 +39,7 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import { updateCurrentProfileInheritance, removeCurrentProfileInheritedSettings, invalidateInheritanceGraph, isManagedFileSelfWrite, writeManagedFile, readJSON, getCurrentProfileDetails, showInheritanceTree, reconcileAllProfiles, getInheritanceGraph, getDescendants, writeParentProfiles, readParentProfiles } from "./profiles";
+import { updateCurrentProfileInheritance, removeCurrentProfileInheritedSettings, invalidateInheritanceGraph, isManagedFileSelfWrite, writeManagedFile, readJSON, getCurrentProfileDetails, showInheritanceTree, reconcileAllProfiles, getInheritanceGraph, getDescendants, writeParentProfiles, getParentNamesFromProfile } from "./profiles";
 import { updateInheritedSettingsOnProfileChange, registerCurrentProfileSaveWatcher, registerParentProfileSaveWatcher } from "./profileWatchers";
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -61,14 +61,20 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("inherit-profile.setParentProfiles", async () => {
       try {
-        const { currentProfileName, profiles } =
+        const { currentProfileName, currentProfileDirectory, profiles } =
           await getCurrentProfileDetails(context);
         const graph = getInheritanceGraph(profiles);
         const descendants = getDescendants(currentProfileName, graph);
         const exclude = new Set([currentProfileName, ...descendants]);
 
-        // 直接从文件读取当前 parents (不走 VS Code 设置 API，避免缓存不一致)
-        const currentParents = new Set(await readParentProfiles(context));
+        // 从文件读取当前 parents（含快照恢复，不走 VS Code 设置 API 避免缓存不一致）
+        const currentParents = new Set(
+          await getParentNamesFromProfile(
+            context,
+            currentProfileName,
+            currentProfileDirectory,
+          )
+        );
 
         const items = Object.keys(profiles)
           .filter((p) => !exclude.has(p))

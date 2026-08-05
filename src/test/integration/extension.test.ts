@@ -800,11 +800,21 @@ suite("Extension integration", () => {
 });
 
 function createContext(rootDir: string): vscode.ExtensionContext {
+  const store = new Map<string, unknown>();
   return {
     globalStorageUri: vscode.Uri.file(
       path.join(rootDir, "User", "globalStorage", "alexthomson.inherit-profile"),
     ),
     subscriptions: [],
+    globalState: {
+      get: <T>(key: string, defaultValue?: T): T | undefined =>
+        (store.get(key) as T | undefined) ?? defaultValue,
+      update: async (key: string, value: unknown): Promise<void> => {
+        store.set(key, value);
+      },
+      keys: [],
+      setKeysForSync: () => {},
+    } as unknown as vscode.Memento,
   } as unknown as vscode.ExtensionContext;
 }
 

@@ -1,0 +1,12 @@
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"rootDir": "src",
+		"outDir": "out",
+		"types": ["node", "mocha"]
+	},
+	"include": [
+		"src"
+	],
+	"exclude": []
+}

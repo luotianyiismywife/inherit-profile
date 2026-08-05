@@ -34,15 +34,7 @@ import * as fs from "fs";
 import { createDebouncedTrigger } from "./debounce";
 import type { DebouncedTrigger } from "./debounce";
 import { resolveParentSettingsPaths, resolveParentExtensionsPaths } from "./profileSettings";
-import {
-  getCurrentProfileDetails,
-  getGlobalStoragePath,
-  getProfileMap,
-  isManagedFileSelfWrite,
-  readRawSettingsFile,
-  reconcileAllProfiles,
-  invalidateInheritanceGraph,
-} from "./profiles";
+import { getCurrentProfileDetails, getGlobalStoragePath, getProfileMap, isManagedFileSelfWrite, readRawSettingsFile, reconcileAllProfiles, getParentNamesFromProfile, invalidateInheritanceGraph } from "./profiles";
 
 /**
  * Creates a {@link vscode.FileSystemWatcher} that watches a single file at an
@@ -212,8 +204,25 @@ export async function registerParentProfileSaveWatcher(
     }
     parentWatchers = [];
 
-    const config = vscode.workspace.getConfiguration("inheritProfile");
-    const parentProfileNames = config.get<string[]>("parents", []);
+    // 从文件读取当前 Profile 的 parents（含快照恢复），不用 config.get——
+    // 直接写文件后 VS Code 配置模型可能未刷新，且扁平/嵌套格式要统一处理
+    let currentProfileName: string;
+    let currentProfileDirectory: string;
+    try {
+      ({ currentProfileName, currentProfileDirectory } =
+        await getCurrentProfileDetails(context));
+    } catch (error) {
+      console.error(
+        "Failed to resolve the current profile directory for the parent save watcher:",
+        error,
+      );
+      return;
+    }
+    const parentProfileNames = await getParentNamesFromProfile(
+      context,
+      currentProfileName,
+      currentProfileDirectory,
+    );
     if (parentProfileNames.length === 0) {
       return;
     }
@@ -264,7 +273,18 @@ export async function registerParentProfileSaveWatcher(
       }
 
       const watcher = createFileWatcher(parentPath);
-      const onChange = () => {
+      const onChange = async () => {
+        // ⚠️ 自身写入检查: 扩展现在可能写父级文件 (restoreParentsFromSnapshot
+        // 恢复 parents、同步扩展时重写 extensions.json)。若为自身写入则忽略,
+        // 防止恢复操作触发冗余的二次全量重建。
+        try {
+          const latestContent = await readRawSettingsFile(parentPath);
+          if (isManagedFileSelfWrite(parentPath, latestContent)) {
+            return;
+          }
+        } catch {
+          // 文件读取失败 (不存在/被删), 交给 reconcile 处理
+        }
         scheduleReapply();
       };
       watcher.onDidChange(onChange);

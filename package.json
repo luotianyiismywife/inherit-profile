@@ -1,6 +1,6 @@
 {
   "name": "inherit-profile-plus",
-  "version": "1.7.1",
+  "version": "1.8.0",
   "displayName": "Inherit Profile Plus",
   "description": "Profile inheritance for VS Code. Community fork with VS Code 1.127+ fixes.",
   "icon": "branding/icon_128.png",
@@ -123,11 +123,12 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "compile:test": "tsc -p ./tsconfig.test.json",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "pretest": "npm run compile:test && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test --config ./vscode-test.config.mjs",
-    "unit-test": "npm run compile && mocha --ui tdd \"out/test/unit/**/*.test.js\""
+    "unit-test": "npm run compile:test && mocha --ui tdd \"out/test/unit/**/*.test.js\""
   },
   "devDependencies": {
     "@types/node": "22.x",

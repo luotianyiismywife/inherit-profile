@@ -41,10 +41,19 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 |--------|------|
 | JSONC 格式（注释、尾逗号） | 用 `jsonc-parser` 解析，不依赖 VS Code |
 | `inheritProfile` 配置块 | 插件自己的配置键（`parents` 等），通过 `vscode.workspace.getConfiguration` 读取 |
+| `inheritProfile.parents` | ⚠️ **必须用扁平格式** `"inheritProfile.parents": [...]`，禁止嵌套 `"inheritProfile": { "parents": ... }`（见下方风险说明） |
 | `inheritProfile._insertionBoundary` | 内部门牌设置 |
 | inherited 标记块 | 插件自己写入的 `// --- INHERITED SETTINGS MARKER ...` 注释块 |
 
-**风险**：极低。VS Code 对 settings.json 的读写兼容所有 JSONC 变体；唯一注意点是 VS Code 1.127+ 将部分 Profile 跟踪移入内部运行时状态后，**插件通过文件 watcher 监听 settings.json 变更仍有效**（文件本身仍是事实来源）。
+**风险**：🟡 中。VS Code 对 settings.json 的读写兼容所有 JSONC 变体；唯一注意点是 VS Code 1.127+ 将部分 Profile 跟踪移入内部运行时状态后，**插件通过文件 watcher 监听 settings.json 变更仍有效**（文件本身仍是事实来源）。
+
+> 🔴 **Settings Sync 覆盖陷阱（2026-08-05 实测确认）**：VS Code 设置同步（`User/sync/`）按 Profile 同步 settings.json，其合并引擎 `settingsMerge.parseSettings` **只识别顶层 key**。嵌套 `inheritProfile: { parents }` 会被当作整体节点、无法正确合并 → Sync 拉取应用时用云端（无 parents）版本覆盖本地，**导致继承树消失、继承扩展被清除**。
+>
+> **开发强制要求**：
+> 1. **写 parents 一律用扁平 key** `"inheritProfile.parents"`（jsonc-parser `modify(raw, ["inheritProfile.parents"], ...)`），同时先删旧嵌套 parents（`modify(raw, ["inheritProfile", "parents"], undefined, ...)`）防双份歧义
+> 2. `writeParentProfiles` 写入后必须同步 `inheritProfile.parentSnapshots`（globalState）快照；`syncProfileByName` 每次同步刷新快照
+> 3. 读 parents 统一走 `getParentNamesFromProfile()`（文件 → 快照恢复），**禁止**用 `vscode.workspace.getConfiguration("inheritProfile").get("parents")`（配置缓存读不到文件已丢失/已恢复的 parents）
+> 4. `reconcileAllProfiles` 开头必须先 `restoreParentsFromSnapshot` 恢复所有缺失 parents，再构建继承图
 
 ### 3. `extensions.json`（每个 Profile 目录内）— 🔴 高
 
@@ -125,6 +134,7 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 | 日期 | VS Code 版本 | 检查结果 | 需要修改的点 |
 |------|-------------|---------|-------------|
 | 2026-07-31 | 1.131 | ✅ 全部兼容 | ① `submenuitem.Profiles` 分支确认死代码（1.127 起已删），建议清理；② `mcp.json` 未纳入继承（功能缺口，见 一.5） |
+| 2026-08-05 | 1.131 | ⚠️ 发现 Settings Sync 覆盖风险 | ① **parents 必须扁平格式**（`inheritProfile.parents`），嵌套格式会被 Settings Sync 覆盖删除 → 已修复（见 一.2 风险说明）；② 新增 parents 快照 `parentSnapshots` + `getParentNamesFromProfile` 统一读取 + `restoreParentsFromSnapshot` 自动恢复；③ `getInheritedSettings`/`collectInheritedExtensions` 不再用 `config.get("parents")`（缓存问题） |
 
 ---
 

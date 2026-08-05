@@ -171,13 +171,14 @@ function isGraphCacheValid(
   const currentKeys = Object.keys(profiles).sort().join(",");
   const cachedKeys = Object.keys(cachedProfilesSnapshot).sort().join(",");
   if (currentKeys !== cachedKeys) return false;
-  // 检查每个 profile 目录的 mtime
+  // 检查每个 profile 的 settings.json 的 mtime（⚠️ 不能用目录 mtime——
+  // Windows 上修改文件内容不更新父目录 mtime，会导致缓存永远不失效）
   for (const [name, dir] of Object.entries(profiles)) {
     try {
-      const stat = statSync(dir);
+      const stat = statSync(path.join(dir, "settings.json"));
       if (stat.mtimeMs !== cachedProfileMtimes[name]) return false;
     } catch {
-      return false; // 目录不存在或无法访问
+      return false; // settings.json 不存在或无法访问
     }
   }
   return true;
@@ -196,13 +197,18 @@ function buildInheritanceGraph(
   for (const [profileName, profileDir] of Object.entries(profiles)) {
     const settingsPath = path.join(profileDir, "settings.json");
     try {
-      // 记录 mtime
-      const dirStat = statSync(profileDir);
-      mtimes[profileName] = dirStat.mtimeMs;
+      // 记录 settings.json 的 mtime（⚠️ 不能用目录 mtime——Windows 上
+      // 修改文件内容不更新父目录 mtime，缓存校验会失效）
+      const fileStat = statSync(settingsPath);
+      mtimes[profileName] = fileStat.mtimeMs;
 
       const raw = readFileSync(settingsPath, "utf8");
       const settings = parseJSONC(raw) as Record<string, any>;
-      const parents = settings?.inheritProfile?.parents ?? [];
+      // 兼容两种存储格式（嵌套/扁平）——扁平格式不会被 jsonc-parser 展开
+      const parents =
+        settings?.inheritProfile?.parents ??
+        settings?.["inheritProfile.parents"] ??
+        [];
       for (const parent of parents) {
         if (profiles[parent]) {
           if (!graph[parent]) graph[parent] = [];
@@ -284,9 +290,186 @@ export async function readParentProfiles(
   return settings?.inheritProfile?.["parents"] ?? settings?.["inheritProfile.parents"] ?? [];
 }
 
+// ---------------------------------------------------------------------------
+// parents 快照（globalState）—— 防御 Settings Sync 覆盖删除
+// ---------------------------------------------------------------------------
+// Settings Sync 的 settingsMerge.parseSettings 只识别**顶层 key**：嵌套的
+// `inheritProfile: { parents }` 会被当作整个 inheritProfile 节点的整体内容处理。
+// 一旦 Sync 拉取应用，本地 parents 会被云端（无 parents）版本覆盖删除。
+//
+// 因此三管齐下：
+//   1) 写入一律用**扁平 key** `"inheritProfile.parents"`（VS Code 配置系统与
+//      Settings Sync 均能正确识别顶层 key，不会被整体替换）
+//   2) 用户主动设置或同步成功后把 parents 存入 globalState 快照
+//      （key 已加入 setKeysForSync，可跨设备同步）
+//   3) 读取时若发现文件缺失且快照存在，自动以扁平格式写回恢复
+const PARENT_SNAPSHOTS_KEY = "inheritProfile.parentSnapshots";
+
+async function getParentSnapshots(
+  context: vscode.ExtensionContext,
+): Promise<Record<string, string[]>> {
+  // globalState 可能缺失（如测试 mock context）——防御性处理
+  if (!context.globalState) {
+    return {};
+  }
+  return (
+    context.globalState.get<Record<string, string[]>>(PARENT_SNAPSHOTS_KEY) ??
+    {}
+  );
+}
+
+async function setParentSnapshot(
+  context: vscode.ExtensionContext,
+  profileName: string,
+  parents: string[],
+): Promise<void> {
+  if (!context.globalState) {
+    return; // 测试环境无 globalState, 跳过快照
+  }
+  const snapshots = await getParentSnapshots(context);
+  if (
+    JSON.stringify(snapshots[profileName] ?? []) ===
+    JSON.stringify(parents)
+  ) {
+    return; // 无变化, 避免无谓写入
+  }
+  await context.globalState.update(PARENT_SNAPSHOTS_KEY, {
+    ...snapshots,
+    [profileName]: parents,
+  });
+}
+
+/**
+ * 若指定 Profile 的 settings.json 中没有 parents 但 globalState 快照有，
+ * 则以扁平格式写回恢复（防御 Settings Sync 反复删除）。
+ *
+ * 注意：仅在文件**完全没有 parents 键**（undefined）时恢复；
+ * 若文件已有 parents（即使是空数组 `[]` = 用户主动清空），尊重现状不覆盖。
+ * @returns 文件中的 parents（恢复后为快照值）
+ */
+async function restoreParentsFromSnapshot(
+  context: vscode.ExtensionContext,
+  profileName: string,
+  profileDir: string,
+): Promise<string[]> {
+  const settingsPath = path.join(profileDir, "settings.json");
+  const current = (await readJSON(settingsPath)) ?? {};
+  const existing =
+    current?.inheritProfile?.parents ?? current?.["inheritProfile.parents"];
+  if (existing !== undefined) {
+    return existing; // 文件已有 parents（含 []），不覆盖
+  }
+
+  const snapshots = await getParentSnapshots(context);
+  const saved = snapshots[profileName];
+  if (!saved || saved.length === 0) {
+    return [];
+  }
+  const raw = await readRawSettingsFile(settingsPath);
+  const { modify, applyEdits } = await import("jsonc-parser");
+  const options: import("jsonc-parser").ModificationOptions = {
+    formattingOptions: { insertSpaces: true, tabSize: 4 },
+  };
+  // 分步写入避免重叠 edits：先删旧嵌套 parents，再写扁平 parents。
+  // ⚠️ 只有存在嵌套 inheritProfile 对象时才删（Settings Sync 重写后的纯扁平
+  // 文件没有该对象，jsonc-parser 对不存在的路径执行删除会抛
+  // "Can not delete in empty document"）。
+  let updated = raw;
+  if ((current as Record<string, any>)?.inheritProfile) {
+    const edits1 = modify(raw, ["inheritProfile", "parents"], undefined, options);
+    updated = applyEdits(raw, edits1);
+  }
+  const edits2 = modify(updated, ["inheritProfile.parents"], saved, options);
+  updated = applyEdits(updated, edits2);
+  await writeManagedFile(settingsPath, updated);
+  invalidateInheritanceGraph();
+  console.info(
+    `[parents-restore] Parents for \`${profileName}\` were missing ` +
+      `(Settings Sync overwrite?) and restored from snapshot: [${saved.join(", ")}]`,
+  );
+  return saved;
+}
+
+/**
+ * 统一读取指定 Profile 的 parents：文件（嵌套/扁平）→ 快照 → 配置 API 回退。
+ * 所有同步入口都应使用本函数，避免 VS Code 配置缓存读到已丢失的 parents。
+ *
+ * 分层设计（文件是事实来源）：
+ *   1. 文件中有 parents（含显式空数组 `[]` = 用户主动清空）→ 返回文件值
+ *   2. 文件缺失（Settings Sync 覆盖删除/从未设置）→ 从快照恢复
+ *   3. 快照也无 → 回退到 VS Code 配置 API。⚠️ **仅当目标 profile 是当前激活
+ *      profile 时**才回退——`config.get("parents")` 读取的是当前激活 profile 的
+ *      配置模型，若用于其他 profile 会把当前 profile 的 parents 错误套用到它
+ *      （如 `syncProfileByName` 处理 Base 时误拿到 Base->Dev 的 parents）。
+ */
+type ParentsSource = "file" | "snapshot" | "config" | "none";
+
+/**
+ * 统一读取指定 Profile 的 parents 并返回来源标记。
+ * 所有同步入口都应使用本函数，避免 VS Code 配置缓存读到已丢失的 parents。
+ *
+ * 分层设计（文件是事实来源）：
+ *   1. 文件中有 parents（含显式空数组 `[]` = 用户主动清空）→ source: file
+ *   2. 文件缺失（Settings Sync 覆盖删除/从未设置）→ 从快照恢复 → source: snapshot
+ *   3. 快照也无 → 回退到 VS Code 配置 API → source: config。
+ *      ⚠️ 仅当目标 profile 是当前激活 profile 时才回退——`config.get("parents")`
+ *      读取的是当前激活 profile 的配置模型，用于其他 profile 会把当前 profile
+ *      的 parents 错误套用到它（如 `syncProfileByName` 处理 Base 时误拿
+ *      Base->Dev 的 parents）。且 config 是**过期缓存**（文件刚被改但配置模型
+ *      未刷新），因此 config 来源的值**不应固化到快照**（见 syncProfileByName）。
+ */
+async function getParentNamesWithSource(
+  context: vscode.ExtensionContext,
+  profileName: string,
+  profileDir: string,
+): Promise<{ parents: string[]; source: ParentsSource }> {
+  const settingsPath = path.join(profileDir, "settings.json");
+  const settings = (await readJSON(settingsPath)) ?? {};
+  const fromFile =
+    settings?.inheritProfile?.parents ?? settings?.["inheritProfile.parents"];
+  if (fromFile !== undefined) {
+    return { parents: fromFile, source: "file" };
+  }
+  // 文件缺失 → 快照恢复
+  const restored = await restoreParentsFromSnapshot(context, profileName, profileDir);
+  if (restored.length > 0) {
+    return { parents: restored, source: "snapshot" };
+  }
+  // 快照也无 → 配置 API 回退（仅限当前激活 profile；兼容旧流程/测试 updateConfig）
+  try {
+    const currentProfileName = await getCurrentProfileName(context);
+    if (currentProfileName === profileName) {
+      const config = vscode.workspace.getConfiguration("inheritProfile");
+      return { parents: config.get<string[]>("parents", []), source: "config" };
+    }
+  } catch {
+    // 无法解析当前 profile（storage.json 未就绪等）→ 视为无 parents
+  }
+  return { parents: [], source: "none" };
+}
+
+/**
+ * 统一读取指定 Profile 的 parents：文件（嵌套/扁平）→ 快照 → 配置 API 回退。
+ * 见 {@link getParentNamesWithSource} 的详细分层说明。
+ */
+export async function getParentNamesFromProfile(
+  context: vscode.ExtensionContext,
+  profileName: string,
+  profileDir: string,
+): Promise<string[]> {
+  const { parents } = await getParentNamesWithSource(
+    context,
+    profileName,
+    profileDir,
+  );
+  return parents;
+}
+
 /**
  * 为当前 Profile 写入父级列表到 settings.json。
  * 不触发同步——调用者需自行调用 reconcileAllProfiles。
+ * 写入使用**扁平 key** `"inheritProfile.parents"`（VS Code 配置系统与
+ * Settings Sync 兼容格式），同时清理旧嵌套 parents 防止双份歧义。
  */
 export async function writeParentProfiles(
   context: vscode.ExtensionContext,
@@ -301,22 +484,25 @@ export async function writeParentProfiles(
     formattingOptions: { insertSpaces: true, tabSize: 4 },
   };
 
-  // 分两步写入, 避免 inheritProfile 不存在时 modify 产生重叠 edits
-  const settings = parseJSONC(raw) as Record<string, any>;
+  // 分步写入避免重叠 edits：先删旧嵌套 parents，再写扁平 parents。
+  // ⚠️ 只有存在嵌套 inheritProfile 对象时才删（同 restoreParentsFromSnapshot，
+  // 纯扁平文件下 jsonc-parser 删除不存在的路径会抛异常）。
   let intermediate = raw;
-  if (!settings?.inheritProfile) {
-    const edits = modify(raw, ["inheritProfile"], {}, options);
-    intermediate = applyEdits(raw, edits);
+  if ((parseJSONC(raw) as Record<string, any>)?.inheritProfile) {
+    const edits1 = modify(raw, ["inheritProfile", "parents"], undefined, options);
+    intermediate = applyEdits(raw, edits1);
   }
-  const edits = modify(
+  const edits2 = modify(
     intermediate,
-    ["inheritProfile", "parents"],
+    ["inheritProfile.parents"],
     parentNames,
     options,
   );
-  const updated = applyEdits(intermediate, edits);
+  const updated = applyEdits(intermediate, edits2);
   await writeManagedFile(settingsPath, updated);
   invalidateInheritanceGraph();
+  // 记录快照（跨设备同步 + 丢失恢复）
+  await setParentSnapshot(context, currentProfileName, parentNames);
   console.info(
     `Parents for \`${currentProfileName}\` set to: [${parentNames.join(", ")}]`,
   );
@@ -651,8 +837,14 @@ async function getInheritedSettings(
     `Found ${Object.keys(currentProfileSettings).length} settings in current profile.`,
   );
 
-  const config = vscode.workspace.getConfiguration("inheritProfile");
-  const parentProfiles = config.get<string[]>("parents", []);
+  // 从文件读取 parents（含快照恢复），不依赖 VS Code 配置缓存
+  const { currentProfileName, currentProfileDirectory } =
+    await getCurrentProfileDetails(context);
+  const parentProfiles = await getParentNamesFromProfile(
+    context,
+    currentProfileName,
+    currentProfileDirectory,
+  );
   const parentProfileSettings = await getProfileSettings(
     context,
     parentProfiles,
@@ -997,13 +1189,16 @@ async function collectInheritedExtensions(
     }
   }
 
-  // 4. 获取父级列表 (优先使用调用者传入的, 否则从 vscode 配置读取)
+  // 4. 获取父级列表 (优先使用调用者传入的, 否则从文件读取 + 快照恢复)
   let parentProfileNames: string[];
   if (parentProfileNamesOverride) {
     parentProfileNames = parentProfileNamesOverride;
   } else {
-    const config = vscode.workspace.getConfiguration("inheritProfile");
-    parentProfileNames = config.get<string[]>("parents", []);
+    parentProfileNames = await getParentNamesFromProfile(
+      context,
+      currentProfileName,
+      currentProfileDir,
+    );
   }
 
   const parentProfiles: { profileName: string; extensions: any[] }[] = [];
@@ -1117,6 +1312,20 @@ async function collectInheritedExtensions(
 }
 
 /**
+ * 恢复所有 Profile 中缺失的 parents（从 globalState 快照写回扁平格式）。
+ * 防御 Settings Sync 覆盖删除后，继承图/级联触发/继承树全部退化的场景。
+ * 幂等：文件已有 parents（含 []）则跳过。
+ */
+async function restoreAllParents(
+  context: vscode.ExtensionContext,
+  profiles: Record<string, string>,
+): Promise<void> {
+  for (const [profileName, profileDir] of Object.entries(profiles)) {
+    await restoreParentsFromSnapshot(context, profileName, profileDir);
+  }
+}
+
+/**
  * Updates the inherited settings for the current profile.
  *
  * When `triggerProfileName` is provided, only performs reconciliation if the
@@ -1131,9 +1340,16 @@ export async function updateCurrentProfileInheritance(
   context: vscode.ExtensionContext,
   triggerProfileName?: string,
 ): Promise<void> {
+  const { currentProfileName, profiles } = await getCurrentProfileDetails(context);
+
+  // 先恢复所有缺失 parents（Settings Sync 覆盖防御）——
+  // 否则继承图会退化为全根，级联判断与树展示全部失真。
+  // 幂等：文件已有 parents 的 profile 不会重写。
+  await restoreAllParents(context, profiles);
+  invalidateInheritanceGraph();
+
   if (triggerProfileName) {
     // 级联触发: 仅对账触发 profile 的后代
-    const { currentProfileName, profiles } = await getCurrentProfileDetails(context);
     const graph = getInheritanceGraph(profiles);
     const descendants = getDescendants(triggerProfileName, graph);
 
@@ -1170,13 +1386,18 @@ async function syncProfileByName(
 ): Promise<void> {
   const settingsPath = path.join(profileDir, "settings.json");
   const rawSettings = (await readJSON(settingsPath)) ?? {};
-  // 兼容两种存储格式:
-  //   - 嵌套: inheritProfile.parents (jsonc-parser modify)
-  //   - 打平: inheritProfile.parents (VS Code 设置默认存储方式)
-  const parentNames: string[] =
-    rawSettings?.inheritProfile?.parents ??
-    rawSettings?.["inheritProfile.parents"] ??
-    [];
+  // 兼容两种存储格式（嵌套/扁平）+ 快照恢复（Settings Sync 覆盖防御）
+  const { parents: parentNames, source } = await getParentNamesWithSource(
+    context,
+    profileName,
+    profileDir,
+  );
+  // 同步时顺带刷新快照，供 Settings Sync 删除后的自动恢复使用。
+  // ⚠️ 仅 file/snapshot 来源刷新——config 来源是**过期缓存**，固化它会导致
+  // 用户手动删除的 parents 被缓存旧值复活。
+  if (source === "file" || source === "snapshot") {
+    await setParentSnapshot(context, profileName, parentNames);
+  }
 
   // 1. 设置继承
   await removeInheritedSettingsFromFile(settingsPath);
@@ -1259,6 +1480,10 @@ export async function reconcileAllProfiles(
   context: vscode.ExtensionContext,
 ): Promise<void> {
   const profiles = await getProfileMap(context);
+
+  // 先恢复所有缺失的 parents（防止 Settings Sync 覆盖后继承图退化为全根）
+  await restoreAllParents(context, profiles);
+
   invalidateInheritanceGraph();
   const graph = getInheritanceGraph(profiles);
 
