@@ -128,6 +128,11 @@ export async function activate(context: vscode.ExtensionContext) {
     "inheritProfile.parentSnapshots",
   ]);
 
+  // 6.5 自动把 inheritProfile 相关 key 加入 settingsSync.ignoredSettings。
+  //     防止 Settings Sync 覆盖删除 parents/元数据（Sync 按顶层 key 合并，
+  //     ignored 的 key 下载时保留本地值）。幂等：已包含则跳过。
+  await ensureIgnoredSettings(context);
+
   // 7. 尝试从 globalState 恢复扩展标记（跨设备同步后标记可能丢失）。
   //    仅恢复标记, 不触发全量对账——由步骤 9 统一完成。
   await checkAndRestoreMarkers(context);
@@ -219,6 +224,49 @@ async function checkAndRestoreMarkers(context: vscode.ExtensionContext): Promise
         "by the startup sync (runOnStartup)."
       );
     }
+  }
+}
+
+/**
+ * 确保 `settingsSync.ignoredSettings` 包含本扩展管理的全部扁平 key。
+ *
+ * 原因：VS Code Settings Sync 按**顶层 key** 合并设置。只要 settings.json 里
+ * 存在嵌套的 `inheritProfile` 对象，Sync 就把 `inheritProfile` 当成一个节点
+ * 整体管理，下载时用云端版本覆盖本地 → parents/元数据被删除。
+ *
+ * 解决：所有继承元数据都用**扁平 key**（无嵌套对象），并把它们加入
+ * `settingsSync.ignoredSettings`——Sync 对 ignored 的 key 下载时保留本地值，
+ * 永不覆盖。幂等：已包含则跳过。
+ */
+const INHERIT_PROFILE_SYNC_KEYS = [
+  "inheritProfile.parents",
+  "inheritProfile._originallyOwnExtensions",
+  "inheritProfile.optedOutExtensions",
+] as const;
+
+async function ensureIgnoredSettings(
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  try {
+    const config = vscode.workspace.getConfiguration("settingsSync");
+    const current = config.get<string[]>("ignoredSettings", []);
+    const missing = INHERIT_PROFILE_SYNC_KEYS.filter((k) => !current.includes(k));
+    if (missing.length === 0) {
+      return;
+    }
+    await config.update(
+      "ignoredSettings",
+      [...current, ...missing],
+      vscode.ConfigurationTarget.Global,
+    );
+    console.info(
+      `[ignored-settings] Added to settingsSync.ignoredSettings: ${missing.join(", ")}`,
+    );
+  } catch (err) {
+    console.warn(
+      `Failed to update settingsSync.ignoredSettings:`,
+      (err as Error)?.message ?? err,
+    );
   }
 }
 

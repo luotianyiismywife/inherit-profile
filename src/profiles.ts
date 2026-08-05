@@ -1023,26 +1023,42 @@ async function applyInheritedSettings(
     );
   }
 
-  // 回写 _originallyOwnExtensions 和 optedOutExtensions 到 settings.json
+  // 回写 _originallyOwnExtensions 和 optedOutExtensions 到 settings.json（扁平 key）
   const { originallyOwn, optedOut } = extResult;
   if (originallyOwn.length > 0 || optedOut.length > 0) {
-    const rawSettings = await readRawSettingsFile(currentProfilePath);
+    let rawSettings = await readRawSettingsFile(currentProfilePath);
 
-    const edits: import("jsonc-parser").Edit[] = [];
     const options: import("jsonc-parser").ModificationOptions = {
       formattingOptions: { insertSpaces: true, tabSize: 4 },
     };
 
     const { modify, applyEdits } = await import("jsonc-parser");
 
-    edits.push(
-      ...modify(rawSettings, ["inheritProfile._originallyOwnExtensions"], originallyOwn, options)
-    );
-    edits.push(
-      ...modify(rawSettings, ["inheritProfile.optedOutExtensions"], optedOut, options)
-    );
+    // 先删旧嵌套残留（仅当嵌套对象存在），再写扁平 key
+    const settings = parseJSONC(rawSettings) as Record<string, any>;
+    let updatedSettings = rawSettings;
+    if (settings?.inheritProfile) {
+      const editsN0 = modify(
+        rawSettings,
+        ["inheritProfile", "_originallyOwnExtensions"],
+        undefined,
+        options,
+      );
+      updatedSettings = applyEdits(rawSettings, editsN0);
+      const editsN1 = modify(
+        updatedSettings,
+        ["inheritProfile", "optedOutExtensions"],
+        undefined,
+        options,
+      );
+      updatedSettings = applyEdits(updatedSettings, editsN1);
+    }
 
-    const updatedSettings = applyEdits(rawSettings, edits);
+    const edits: import("jsonc-parser").Edit[] = [
+      ...modify(updatedSettings, ["inheritProfile._originallyOwnExtensions"], originallyOwn, options),
+      ...modify(updatedSettings, ["inheritProfile.optedOutExtensions"], optedOut, options),
+    ];
+    updatedSettings = applyEdits(updatedSettings, edits);
     await writeManagedFile(currentProfilePath, updatedSettings);
   }
 
@@ -1111,8 +1127,15 @@ async function collectInheritedExtensions(
   if (!originallyOwn || !optedOutList) {
     const settingsPath = path.join(currentProfileDir, "settings.json");
     const settings = await readJSON(settingsPath);
-    originallyOwn = settings?.inheritProfile?._originallyOwnExtensions ?? [];
-    optedOutList = settings?.inheritProfile?.optedOutExtensions ?? [];
+    // 兼容嵌套/扁平两种格式（扁平是目标格式，防 Settings Sync 节点锁定）
+    originallyOwn =
+      settings?.inheritProfile?._originallyOwnExtensions ??
+      settings?.["inheritProfile._originallyOwnExtensions"] ??
+      [];
+    optedOutList =
+      settings?.inheritProfile?.optedOutExtensions ??
+      settings?.["inheritProfile.optedOutExtensions"] ??
+      [];
   }
 
   // 2. 转换旧标记并持久化（仅首次需要）
@@ -1423,8 +1446,10 @@ async function syncProfileByName(
       currentExtensions,
       profileName,
       profiles,
-      rawSettings?.inheritProfile?._originallyOwnExtensions,
-      rawSettings?.inheritProfile?.optedOutExtensions,
+      rawSettings?.inheritProfile?._originallyOwnExtensions ??
+      rawSettings?.["inheritProfile._originallyOwnExtensions"],
+      rawSettings?.inheritProfile?.optedOutExtensions ??
+      rawSettings?.["inheritProfile.optedOutExtensions"],
       parentNames,
     );
 
@@ -1438,7 +1463,7 @@ async function syncProfileByName(
       );
     }
 
-    // 回写元数据
+    // 回写元数据（扁平 key，防 Settings Sync 节点锁定；同时清理旧嵌套残留）
     const { originallyOwn, optedOut } = extResult;
     if (originallyOwn.length > 0 || optedOut.length > 0) {
       let rawSettingsContent = await readRawSettingsFile(settingsPath);
@@ -1447,22 +1472,36 @@ async function syncProfileByName(
         formattingOptions: { insertSpaces: true, tabSize: 4 },
       };
 
-      // 逐条应用 edits, 避免同时修改同一对象导致 Overlapping edit
+      // 逐条应用 edits, 避免同时修改同一对象导致 Overlapping edit。
+      // 先删旧嵌套元数据（仅当嵌套对象存在），再写扁平 key。
       const settings = parseJSONC(rawSettingsContent) as Record<string, any>;
-      if (!settings?.inheritProfile) {
-        const edits = modify(rawSettingsContent, ["inheritProfile"], {}, options);
-        rawSettingsContent = applyEdits(rawSettingsContent, edits);
+      let updated = rawSettingsContent;
+      if (settings?.inheritProfile) {
+        const edits0 = modify(
+          rawSettingsContent,
+          ["inheritProfile", "_originallyOwnExtensions"],
+          undefined,
+          options,
+        );
+        updated = applyEdits(rawSettingsContent, edits0);
+        const edits0b = modify(
+          updated,
+          ["inheritProfile", "optedOutExtensions"],
+          undefined,
+          options,
+        );
+        updated = applyEdits(updated, edits0b);
       }
       const edits1 = modify(
-        rawSettingsContent,
-        ["inheritProfile", "_originallyOwnExtensions"],
+        updated,
+        ["inheritProfile._originallyOwnExtensions"],
         originallyOwn,
         options,
       );
-      let updated = applyEdits(rawSettingsContent, edits1);
+      updated = applyEdits(updated, edits1);
       const edits2 = modify(
         updated,
-        ["inheritProfile", "optedOutExtensions"],
+        ["inheritProfile.optedOutExtensions"],
         optedOut,
         options,
       );
@@ -1570,20 +1609,32 @@ export async function removeCurrentProfileInheritedSettings(
     );
   }
 
-  // 清理 settings.json 中的继承元数据键 (重置为空数组而非删除, 避免 jsonc-parser
-  // 处理 undefined value 的行为不确定)
+  // 清理 settings.json 中的继承元数据键（扁平 key + 清嵌套残留）
   try {
     const settingsPath = path.join(currentProfileDirectory, "settings.json");
-    const raw = await readRawSettingsFile(settingsPath);
+    let raw = await readRawSettingsFile(settingsPath);
     const { modify, applyEdits } = await import("jsonc-parser");
     const options: import("jsonc-parser").ModificationOptions = {
       formattingOptions: { insertSpaces: true, tabSize: 4 },
     };
-    const edits: import("jsonc-parser").Edit[] = [];
-    for (const key of ["_originallyOwnExtensions", "optedOutExtensions"] as const) {
-      edits.push(...modify(raw, ["inheritProfile", key], [], options));
+    // 先删嵌套残留
+    const parsed = parseJSONC(raw) as Record<string, any>;
+    let updated = raw;
+    if (parsed?.inheritProfile) {
+      for (const key of ["_originallyOwnExtensions", "optedOutExtensions"] as const) {
+        updated = applyEdits(
+          updated,
+          modify(updated, ["inheritProfile", key], undefined, options),
+        );
+      }
     }
-    const updated = applyEdits(raw, edits);
+    // 再清扁平 key（重置为空数组而非删除, 避免 jsonc-parser 处理 undefined 行为不确定）
+    for (const key of ["inheritProfile._originallyOwnExtensions", "inheritProfile.optedOutExtensions"] as const) {
+      updated = applyEdits(
+        updated,
+        modify(updated, [key], [], options),
+      );
+    }
     if (updated !== raw) {
       await writeManagedFile(settingsPath, updated);
     }
