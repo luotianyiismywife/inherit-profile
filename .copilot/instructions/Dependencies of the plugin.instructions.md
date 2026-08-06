@@ -135,6 +135,7 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 |------|-------------|---------|-------------|
 | 2026-07-31 | 1.131 | ✅ 全部兼容 | ① `submenuitem.Profiles` 分支确认死代码（1.127 起已删），建议清理；② `mcp.json` 未纳入继承（功能缺口，见 一.5） |
 | 2026-08-05 | 1.131 | ⚠️ 发现 Settings Sync 覆盖风险 | ① **parents 必须扁平格式**（`inheritProfile.parents`），嵌套格式会被 Settings Sync 覆盖删除 → 已修复（见 一.2 风险说明）；② 新增 parents 快照 `parentSnapshots` + `getParentNamesFromProfile` 统一读取 + `restoreParentsFromSnapshot` 自动恢复；③ `getInheritedSettings`/`collectInheritedExtensions` 不再用 `config.get("parents")`（缓存问题） |
+| 2026-08-06 | 1.132 | ✅ 全部兼容 | ① 源码确认 `PROFILES_KEY`/`PROFILE_ASSOCIATIONS_KEY`（workspaces/emptyWindows）/`windowsState.lastActiveWindow.backupPath`/`DISABLED_EXTENSIONS_STORAGE_PATH`/`ItemTable` 均未变；② `engines.vscode ^1.131.0` 兼容 1.132，无需升级；③ `@types/vscode` npm 最新仍 1.125（滞后，符合预期） |
 
 ---
 

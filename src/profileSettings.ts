@@ -153,6 +153,10 @@ export const NON_FLATTENABLE_SETTINGS: ReadonlySet<string> = new Set([
   "terminal.integrated.profiles.osx",
   "terminal.integrated.profiles.windows",
   "workbench.editor.customLabels.patterns",
+  // chat.tools.*.autoApprove 的 key 是数据（URL/命令正则），拍平会产生含
+  // 特殊字符（URL、引号、反斜杠）的扁平 key——既破坏 JSON 也失去 VS Code 语义
+  "chat.tools.terminal.autoApprove",
+  "chat.tools.urls.autoApprove",
 ]);
 
 /**
@@ -772,8 +776,11 @@ export function buildInheritedSettingsBlock(
   flattened: Record<string, any>,
   tab: string,
 ): string {
+  // ⚠️ 必须用 JSON.stringify(key) 转义 key——扁平 key 可能包含双引号/反斜杠
+  //（如 chat.tools.terminal.autoApprove 的 key 是含引号的 PowerShell 命令正则），
+  // 模板字符串拼接会生成无效 JSON，导致 Settings Sync 报"内容无效"。
   const entries = Object.entries(flattened)
-    .map(([key, value]) => `${tab}"${key}": ${JSON.stringify(value)}`)
+    .map(([key, value]) => `${tab}${JSON.stringify(key)}: ${JSON.stringify(value)}`)
     .join(",\n");
   const insertionBoundaryEntry =
     `${tab}"${INHERITED_SETTINGS_INSERTION_BOUNDARY_KEY}": ${JSON.stringify(INHERITED_SETTINGS_INSERTION_BOUNDARY_VALUE)}`;
