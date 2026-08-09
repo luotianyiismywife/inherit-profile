@@ -9,7 +9,6 @@ import {
   markExtensionAsOptedOut,
   convertOldMarkers,
   resolveParentExtensionsPaths,
-  compareVersions,
   ExtensionEntry,
   INHERITED_PROFILE_META_KEY,
 } from "../../profileSettings";
@@ -81,26 +80,7 @@ suite("mergeInheritedExtensions full reconciliation", () => {
     ]);
   });
 
-  // ── compareVersions 单元测试 ──
-
-  test("compareVersions handles basic semver ordering", () => {
-    assert.ok(compareVersions("1.6.1", "1.6.0") > 0, "1.6.1 > 1.6.0");
-    assert.ok(compareVersions("1.6.0", "1.6.1") < 0, "1.6.0 < 1.6.1");
-    assert.strictEqual(compareVersions("1.6.0", "1.6.0"), 0);
-    assert.ok(compareVersions("2.0.0", "1.9.9") > 0, "major wins");
-    assert.ok(compareVersions("1.10.0", "1.9.9") > 0, "minor not lexicographic");
-    assert.ok(compareVersions("1.0.0", "1.0.0-beta") > 0 || compareVersions("1.0.0", "1.0.0-beta") === 0, "pre-release tolerated");
-  });
-
-  test("compareVersions tolerates v prefix, empty and undefined", () => {
-    assert.strictEqual(compareVersions("v1.6.1", "1.6.1"), 0, "v prefix ignored");
-    assert.strictEqual(compareVersions(undefined, undefined), 0);
-    assert.strictEqual(compareVersions("1.6.0", undefined), 1, "undefined treated as 0");
-    assert.strictEqual(compareVersions(undefined, "1.6.0"), -1);
-    assert.strictEqual(compareVersions("", "0"), 0);
-  });
-
-  // ── 版本回退修复回归测试（issue #1）──
+  // ── 核心对账算法测试 ──
 
   test("empty extensions with no parents returns empty", () => {
     const r = mergeInheritedExtensions([], [], []);
@@ -205,87 +185,5 @@ suite("mergeInheritedExtensions full reconciliation", () => {
     const r = mergeInheritedExtensions(current, [parent], []);
     // 'a' is optedOut, should not appear in parentNameMap
     assert.strictEqual(r.parentNameMap["a"], undefined);
-  });
-
-  // ── 版本回退修复回归测试（issue #1）──
-
-  test("child's manually-updated inherited extension version is preserved when >= parent version", () => {
-    // 复现: 父级 Base 有 1.6.0, 子级 Dev 手动从 VSIX 更新到 1.6.1 (仍带 inherited 标记)
-    const parent: any = {
-      profileName: "Base",
-      extensions: [
-        { identifier: { id: "ext.a" }, version: "1.6.0", location: "/base/ext.a-1.6.0" },
-      ],
-    };
-    const current: any = [
-      {
-        identifier: { id: "ext.a" },
-        version: "1.6.1",
-        location: "/dev/ext.a-1.6.1",
-        relativeLocation: "ext.a-1.6.1",
-        metadata: { inheritProfile: { inherited: true } },
-      },
-    ];
-    const r = mergeInheritedExtensions(current, [parent], []);
-    const a = r.merged.find(e => e.identifier?.id === "ext.a")!;
-    assert.strictEqual(a.version, "1.6.1", "child version must be preserved");
-    assert.strictEqual(a.location, "/dev/ext.a-1.6.1", "child location must be preserved");
-    assert.strictEqual(a.metadata?.inheritProfile?.inherited, true);
-  });
-
-  test("parent's newer version still syncs down to child", () => {
-    // 父级升级到 1.7.0, 子级停留在 1.6.1 → 应同步父级版本
-    const parent: any = {
-      profileName: "Base",
-      extensions: [
-        { identifier: { id: "ext.a" }, version: "1.7.0", location: "/base/ext.a-1.7.0" },
-      ],
-    };
-    const current: any = [
-      {
-        identifier: { id: "ext.a" },
-        version: "1.6.1",
-        location: "/dev/ext.a-1.6.1",
-        metadata: { inheritProfile: { inherited: true } },
-      },
-    ];
-    const r = mergeInheritedExtensions(current, [parent], []);
-    const a = r.merged.find(e => e.identifier?.id === "ext.a")!;
-    assert.strictEqual(a.version, "1.7.0", "parent's newer version should win");
-    assert.strictEqual(a.location, "/base/ext.a-1.7.0");
-    assert.strictEqual(a.metadata?.inheritProfile?.inherited, true);
-  });
-
-  test("same version keeps child entry unchanged", () => {
-    const parent: any = {
-      profileName: "Base",
-      extensions: [{ identifier: { id: "ext.a" }, version: "1.6.0", location: "/base/ext.a-1.6.0" }],
-    };
-    const current: any = [
-      {
-        identifier: { id: "ext.a" },
-        version: "1.6.0",
-        location: "/dev/ext.a-1.6.0",
-        metadata: { inheritProfile: { inherited: true } },
-      },
-    ];
-    const r = mergeInheritedExtensions(current, [parent], []);
-    const a = r.merged.find(e => e.identifier?.id === "ext.a")!;
-    assert.strictEqual(a.version, "1.6.0");
-    assert.strictEqual(a.location, "/dev/ext.a-1.6.0", "child entry preserved when versions equal");
-  });
-
-  test("parent version wins when child inherited entry has no version", () => {
-    const parent: any = {
-      profileName: "Base",
-      extensions: [{ identifier: { id: "ext.a" }, version: "1.6.0", location: "/base/ext.a-1.6.0" }],
-    };
-    const current: any = [
-      { identifier: { id: "ext.a" }, metadata: { inheritProfile: { inherited: true } } },
-    ];
-    const r = mergeInheritedExtensions(current, [parent], []);
-    const a = r.merged.find(e => e.identifier?.id === "ext.a")!;
-    assert.strictEqual(a.version, "1.6.0", "parent entry used when child has no version");
-    assert.strictEqual(a.location, "/base/ext.a-1.6.0");
   });
 });

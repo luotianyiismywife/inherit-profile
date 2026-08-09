@@ -286,32 +286,6 @@ export interface ExtensionEntry {
 }
 
 /**
- * 比较 semver 版本号（容忍前导 `v`）：
- * a > b 返回正数，a === b 返回 0，a < b 返回负数。
- * 空值按 0 处理（`undefined` / 空串等同 "0"）。
- */
-export function compareVersions(
-  a: string | undefined,
-  b: string | undefined,
-): number {
-  const pa = (a ?? "")
-    .replace(/^v/i, "")
-    .split(".")
-    .map((n) => parseInt(n, 10) || 0);
-  const pb = (b ?? "")
-    .replace(/^v/i, "")
-    .split(".")
-    .map((n) => parseInt(n, 10) || 0);
-  const len = Math.max(pa.length, pb.length);
-  for (let i = 0; i < len; i++) {
-    const na = pa[i] ?? 0;
-    const nb = pb[i] ?? 0;
-    if (na !== nb) return na - nb;
-  }
-  return 0;
-}
-
-/**
  * Metadata stored inside an extension entry's `metadata.inheritProfile` field.
  */
 export interface InheritedProfileMeta {
@@ -512,16 +486,9 @@ export function mergeInheritedExtensions<T extends ExtensionEntry>(
           originallyOwn.add(id);
         }
       } else if (!inheritedMap[id]) {
-        // 子级已 inherited 且版本 >= 父级 → 保留子级条目。
-        // 子级可能是手动更新的更高版本（如 VSIX 安装），父级全量对账不应回退它。
-        const prev = inheritedFromPrev[id];
-        if (prev && compareVersions(prev.version, parentExt.version) >= 0) {
-          inheritedMap[id] = prev;
-        } else {
-          inheritedMap[id] = markExtensionAsInherited(
-            parentExt as unknown as T
-          );
-        }
+        inheritedMap[id] = markExtensionAsInherited(
+          parentExt as unknown as T
+        );
       }
     }
   }
@@ -750,105 +717,19 @@ export function removeTrailingComma(text: string): string {
  * 1. The content before the closing brace (excluding the closing brace).
  * 2. The content after and including the closing brace.
  *
- * Defensively parses the file with a state machine that tracks strings,
- * single-line comments, and multi-line comments, so `}` characters that appear
- * inside string values (e.g. PowerShell command regexes) or comments are NOT
- * mistaken for the top-level closing brace.
- *
- * If the file is malformed (no top-level `{`, unbalanced braces, or a closing
- * brace at depth 0 that doesn't correspond to the opening brace), returns
- * `null` so callers can abort the write instead of corrupting the file.
- *
  * @param raw Raw `settings.json` file.
- * @returns `[beforeClose, afterClose]`, or `null` if the file is malformed.
+ * @returns Returns `raw` in two parts: before, and after the closing brace.
  */
 export function splitRawSettingsByClosingBrace(
   raw: string,
-): [beforeClose: string, afterClose: string] | null {
-  let depth = 0;
-  let inString = false;
-  let stringChar = "";
-  let inLineComment = false;
-  let inBlockComment = false;
-  let topLevelCloseIndex = -1;
-
-  for (let i = 0; i < raw.length; i++) {
-    const char = raw[i];
-    const nextChar = raw[i + 1];
-
-    // State 1: Inside a single-line comment — skip until newline.
-    if (inLineComment) {
-      if (char === "\n") inLineComment = false;
-      continue;
-    }
-
-    // State 2: Inside a block comment — skip until `*/`.
-    if (inBlockComment) {
-      if (char === "*" && nextChar === "/") {
-        inBlockComment = false;
-        i++; // Consume the '/'
-      }
-      continue;
-    }
-
-    // State 3: Inside a string — skip escaped chars and the closing quote.
-    if (inString) {
-      if (char === "\\") {
-        i++; // Skip escaped character
-        continue;
-      }
-      if (char === stringChar) inString = false;
-      continue;
-    }
-
-    // State 4: Default (code).
-    if (char === "/" && nextChar === "/") {
-      inLineComment = true;
-      i++;
-      continue;
-    }
-    if (char === "/" && nextChar === "*") {
-      inBlockComment = true;
-      i++;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      inString = true;
-      stringChar = char;
-      continue;
-    }
-    if (char === "{") {
-      depth++;
-      continue;
-    }
-    if (char === "}") {
-      depth--;
-      if (depth === 0) {
-        // The FIRST time we return to depth 0, that's the top-level closing
-        // brace — provided we saw an opening brace first.
-        if (topLevelCloseIndex === -1) {
-          topLevelCloseIndex = i;
-        }
-        // A second depth-0 close means we closed the top level twice — the
-        // file is malformed (e.g. `]},` corruption). Stop and bail.
-        else {
-          return null;
-        }
-      }
-      if (depth < 0) {
-        return null; // Unbalanced: more closes than opens.
-      }
-    }
+): [beforeClose: string, afterClose: string] {
+  let closingIndex = raw.lastIndexOf("}");
+  if (closingIndex === -1) {
+    return ["{\n", "}\n"];
   }
 
-  // We never found the top-level closing brace (either never opened, or the
-  // file was truncated mid-write).
-  if (topLevelCloseIndex === -1) {
-    return null;
-  }
-
-  const beforeClose = raw.slice(0, topLevelCloseIndex);
-  const afterClose = raw.slice(topLevelCloseIndex);
+  const beforeClose = raw.slice(0, closingIndex);
+  const afterClose = raw.slice(closingIndex);
   return [beforeClose, afterClose];
 }
 
@@ -882,112 +763,6 @@ export function findTabValue(raw: string): string {
 
   // Fallback tab size:
   return "    ";
-}
-
-/**
- * Validates that a JSONC settings file string is structurally sound enough to
- * be safely written back by this extension.
- *
- * Checks (all using a string/comment-aware state machine, so values containing
- * `{}`/`[]`/quotes — e.g. PowerShell regexes — are not misparsed):
- *   - braces are balanced (same number of `{` and `}`)
- *   - brackets are balanced
- *   - the document starts with a top-level `{`
- *   - the document ends with the matching top-level `}`
- *   - no stray top-level closing brace appears before the final one
- *     (e.g. the `]},` corruption where the parents array is closed early)
- *
- * @param raw Raw settings.json content.
- * @returns `true` if the structure looks sound, `false` otherwise.
- */
-export function isBalancedSettingsFile(raw: string): boolean {
-  let depth = 0;
-  let bracketDepth = 0;
-  let inString = false;
-  let stringChar = "";
-  let inLineComment = false;
-  let inBlockComment = false;
-  let topLevelCloseSeen = false;
-
-  for (let i = 0; i < raw.length; i++) {
-    const char = raw[i];
-    const nextChar = raw[i + 1];
-
-    if (inLineComment) {
-      if (char === "\n") inLineComment = false;
-      continue;
-    }
-    if (inBlockComment) {
-      if (char === "*" && nextChar === "/") {
-        inBlockComment = false;
-        i++;
-      }
-      continue;
-    }
-    if (inString) {
-      if (char === "\\") {
-        i++;
-        continue;
-      }
-      if (char === stringChar) inString = false;
-      continue;
-    }
-
-    if (char === "/" && nextChar === "/") {
-      inLineComment = true;
-      i++;
-      continue;
-    }
-    if (char === "/" && nextChar === "*") {
-      inBlockComment = true;
-      i++;
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      inString = true;
-      stringChar = char;
-      continue;
-    }
-    if (char === "{") {
-      if (topLevelCloseSeen) return false; // Content after top-level close.
-      depth++;
-      continue;
-    }
-    if (char === "}") {
-      depth--;
-      if (depth < 0) return false; // Unbalanced: more closes than opens.
-      if (depth === 0) {
-        if (topLevelCloseSeen) return false; // Second top-level close.
-        topLevelCloseSeen = true;
-      }
-      continue;
-    }
-    if (char === "[") {
-      if (topLevelCloseSeen) return false;
-      bracketDepth++;
-      continue;
-    }
-    if (char === "]") {
-      bracketDepth--;
-      if (bracketDepth < 0) return false;
-      continue;
-    }
-    // Any other non-whitespace content after the top-level close is garbage
-    // (e.g. the `]},` corruption leaves `},` after the close, or a truncated
-    // write leaves trailing text).
-    if (topLevelCloseSeen && !/\s/.test(char)) {
-      return false;
-    }
-  }
-
-  // Strings/comments must terminate, and the top level must be a balanced
-  // `{ ... }` pair with nothing before the opening brace or after the close.
-  if (inString || inBlockComment) return false;
-  if (depth !== 0 || bracketDepth !== 0) return false;
-  if (!topLevelCloseSeen) return false;
-
-  const firstNonWhitespace = raw.search(/\S/);
-  return firstNonWhitespace !== -1 && raw[firstNonWhitespace] === "{";
 }
 
 /**

@@ -88,7 +88,6 @@ import {
   INHERITED_SETTINGS_END_MARKER,
   INHERITED_SETTINGS_START_MARKER,
   insertBeforeClose,
-  isBalancedSettingsFile,
   mergeFlattenedSettings,
   mergeInheritedExtensions,
   removeInsertionBoundarySetting,
@@ -519,18 +518,6 @@ export async function writeParentProfiles(
 export async function readJSON(filePath: string): Promise<any> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    // Defensive: detect structurally broken files early (e.g. the `]},`
-    // corruption where the top-level object is closed twice). We log a warning
-    // instead of silently returning {} — a corrupted file should be surfaced,
-    // and no further inheritance logic should build on top of it.
-    if (!isBalancedSettingsFile(raw)) {
-      console.warn(
-        `[settings-consistency] \`${filePath}\` is structurally unbalanced ` +
-          `(braces/brackets or stray top-level close). Refusing to treat it ` +
-          `as valid settings to avoid building inheritance on corrupted data.`,
-      );
-      return {};
-    }
     return parseJSONC(raw); // handles // and /* */ comments
   } catch (error) {
     console.error(`Failed to read JSONC at ${filePath}:`, error);
@@ -917,18 +904,6 @@ async function removeInheritedSettingsFromFile(
     cleaned += "\n}";
   }
 
-  // Defensive: refuse to write back a structurally broken file. The block
-  // removal itself must never entrench `]},` corruption (e.g. when the input
-  // already had a stray top-level close from an external mid-sync rewrite).
-  if (!isBalancedSettingsFile(cleaned)) {
-    console.warn(
-      `[settings-consistency] Refusing to write cleaned settings to ` +
-        `\`${settingsPath}\`: result is not structurally balanced. ` +
-        `Skipping write to avoid corrupting the file further.`,
-    );
-    return;
-  }
-
   console.info(
     `Removed ${removedCount} inherited settings block(s) from \`${settingsPath}\`.`,
   );
@@ -955,21 +930,7 @@ async function writeInheritedSettings(
   // Read the raw file, split it by the closing brace, and get the tab size
   // for formatting:
   const raw = await readRawSettingsFile(settingsPath);
-
-  // Defensive: if the file is malformed (e.g. `]},` corruption from an
-  // external mid-sync rewrite), abort the write instead of entrenching the
-  // corruption — a bad file should never be further rewritten by us.
-  const split = await splitRawSettingsByClosingBrace(raw);
-  if (!split) {
-    console.warn(
-      `[settings-consistency] Refusing to write inherited settings to ` +
-        `\`${settingsPath}\`: settings file is malformed (unbalanced or ` +
-        `duplicated top-level braces). Skipping write to avoid corrupting ` +
-        `the file further.`,
-    );
-    return;
-  }
-  const [beforeClose, afterClose] = split;
+  const [beforeClose, afterClose] = await splitRawSettingsByClosingBrace(raw);
   const tab = findTabValue(raw);
 
   // Build the inherited settings block:
@@ -979,18 +940,6 @@ async function writeInheritedSettings(
   // brace blocks:
   const beforeClosePlusBlock = insertBeforeClose(beforeClose, block);
   const finalSettings = beforeClosePlusBlock + afterClose;
-
-  // Final structural sanity check before writing: never write a file that
-  // doesn't round-trip as balanced JSONC (guards against edge cases in the
-  // insertion logic itself).
-  if (!isBalancedSettingsFile(finalSettings)) {
-    console.warn(
-      `[settings-consistency] Refusing to write inherited settings to ` +
-        `\`${settingsPath}\`: merged result is not structurally balanced. ` +
-        `Skipping write.`,
-    );
-    return;
-  }
 
   // Write the final settings to the settings path:
   await writeManagedFile(settingsPath, finalSettings);
