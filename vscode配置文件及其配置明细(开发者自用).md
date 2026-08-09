@@ -4,16 +4,16 @@ description: "Use when: 需要了解用户本机 VS Code Profile 体系（Base/B
 
 # VS Code Profile 体系 · 完整架构文档
 
-> 最后更新: 2026-07-17
+> 最后更新: 2026-08-10
 
 ---
 
 ## 一、整体架构
 
 ```
-Base（通用底座·17个）
-├── Base->Dev（通用开发工具·55个）
-└── Base->Writing（文字写作·17个，自动继承 Base）
+Base（通用底座·19个）
+├── Base->Dev（通用开发工具·59个 含继承自 Base）
+└── Base->Writing（文字写作·19个，纯继承 Base，无 own 扩展）
 
 Test（未归类文档工具，3个，仅文档规划）
 ```
@@ -22,7 +22,7 @@ Test（未归类文档工具，3个，仅文档规划）
 
 ## 二、Profile 明细
 
-### 2.1 Base · 通用底座（17 个扩展）
+### 2.1 Base · 通用底座（19 个扩展）
 
 **UUID:** `10a9f58d`
 
@@ -86,14 +86,18 @@ Test（未归类文档工具，3个，仅文档规划）
 | `mushan.vscode-paste-image`               | Paste Image          | 粘贴图片              |
 | `davidanson.vscode-markdownlint`          | markdownlint         | Markdown 规范检查     |
 | `shd101wyy.markdown-preview-enhanced`     | Markdown Preview Enhanced | Markdown 增强预览 |
+| `luotianyiismywife.tokenrhythm-copilot-provider` | TokenRhythm Provider | Copilot 模型 |
+| `ms-vscode.vscode-chat-customizations-evaluations` | Chat Customizations Evaluations | Copilot 评估 |
 
 ---
 
-### 2.2 Base->Dev · 通用开发（55 个扩展，含继承自 Base）
+### 2.2 Base->Dev · 通用开发（59 个扩展，含继承自 Base）
 
 **UUID:** `-367578e4`
 
 **继承:** `inheritProfile.parents: ["Base"]`
+
+**扩展构成:** own 41 个（下表）+ 继承 Base 19 个 − 重复的 inherit-profile-plus 1 个 = **59 个**
 
 **Settings:**
 
@@ -156,12 +160,16 @@ Test（未归类文档工具，3个，仅文档规划）
 | `gitlab.gitlab-workflow`                 | GitLab Workflow            | GitLab 集成       |
 | `ms-dotnettools.vscode-dotnet-runtime`   | .NET Runtime               | .NET 运行时       |
 | `ms-azuretools.vscode-containers`        | Dev Containers             | 容器开发环境      |
+| `christian-kohler.npm-intellisense`      | npm Intellisense           | npm 提示          |
+| `dbaeumer.vscode-eslint`                 | ESLint                     | JS 代码检查       |
 
-### 2.4 Base->Writing · 文字写作（17 个扩展，含继承自 Base，由 inherit-profile-plus 自动管理）
+### 2.4 Base->Writing · 文字写作（19 个扩展 · 纯继承 Base）
 
 **UUID:** `-332dce57`
 
 **继承:** `inheritProfile.parents: ["Base"]`
+
+**⚠️ 重要：Writing 无 own 扩展**，`extensions.json` 应为**空数组 `[]`**，全部扩展由 `inherit-profile-plus` 从 Base 自动同步。
 
 **Settings:**
 
@@ -179,7 +187,7 @@ Test（未归类文档工具，3个，仅文档规划）
 
 **扩展列表:**
 
-与 **Base** 完全一致（17 个），由 `inherit-profile-plus` 在启动/切 Profile 时自动同步。无需手动维护。
+与 **Base** 完全一致（19 个），由 `inherit-profile-plus` 在启动/切 Profile 时自动同步。**无需手动维护，`extensions.json` 保持空数组。**
 
 ---
 
@@ -257,9 +265,9 @@ Test（未归类文档工具，3个，仅文档规划）
 
 ```mermaid
 graph TB
-    Base["Base (17个)"]
-    Dev["Base->Dev (55个)<br/>prettier, errorlens, dependi<br/>+Python, Go, Java, 前端<br/>+lldb, xml, shell, debug<br/>+PowerShell, Rust, .NET, GitLab<br/>+Dev Containers"]
-    Writing["Base->Writing (17个)<br/>自动继承 Base"]
+    Base["Base (19个)"]
+    Dev["Base->Dev (59个)<br/>own 41个: prettier, errorlens, dependi<br/>+Python, Go, Java, 前端, ESLint, npm<br/>+lldb, xml, shell, debug<br/>+PowerShell, Rust, .NET, GitLab<br/>+Dev Containers"]
+    Writing["Base->Writing (19个)<br/>纯继承 Base，无 own 扩展"]
 
     Base -->|inherit| Dev
     Base -->|inherit| Writing

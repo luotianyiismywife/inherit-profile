@@ -30,3 +30,6 @@ coverage/
 # Packaged extensions:
 *.vsix
 
+
+# TokenRhythm 扩展运行时日志（自动生成，勿提交）
+.copilot/model-sync-log.md

@@ -34,6 +34,11 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 
 > ⚠️ **关键教训**：vsix 打包必须**包含 dependencies**！用 `npx vsce package`（**不要加 `--no-dependencies`**），否则插件装不上 node_modules，用户激活直接崩溃（报"命令未找到"）。打包后务必 `npx vsce ls` 确认 `node_modules/` 在包内。
 
+> ⚠️ **打包前必查 `.vscodeignore`**：新增了项目根目录的文件/目录后，**先确认 `.vscodeignore` 是否要同步更新**再打包！1.8.6 曾把 `backup-profiles-*/`（用户 profile 完整备份，含 settings.json / extensions.json / state.vscdb）打包进 VSIX，属于**严重隐私泄露**。检查清单：
+> - 项目根目录是否有**非发布物**（备份目录、临时脚本、`*.bak`、`*-out.txt`、`*.vsix`）→ 必须加进 `.vscodeignore`
+> - 打包前跑 `npx vsce ls` 检查文件列表，**确认没有** `backup-*`、`*.bak*`、`state.vscdb`、`settings.json`、`*.md`（除 README）等敏感/多余文件
+> - 本地测试用的 VSIX 打完包**删掉或移出项目目录**（避免下次再被打包）
+
 ### 1.3 GitHub Release 创建流程
 
 1. 打开 `https://github.com/<owner>/<repo>/releases/new?tag=vX.Y.Z&title=vX.Y.Z` → 用户登录 GitHub
