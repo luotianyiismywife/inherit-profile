@@ -10,6 +10,7 @@ import {
   INHERITED_SETTINGS_INSERTION_BOUNDARY_KEY,
   INHERITED_SETTINGS_START_MARKER,
   insertBeforeClose,
+  isBalancedSettingsFile,
   mergeFlattenedSettings,
   mergeInheritedExtensions,
   NON_FLATTENABLE_SETTINGS,
@@ -362,8 +363,137 @@ ${block}${block}}
     );
   });
 
-  test("splitRawSettingsByClosingBrace falls back to an empty object shape", () => {
-    assert.deepStrictEqual(splitRawSettingsByClosingBrace(""), ["{\n", "}\n"]);
+  test("splitRawSettingsByClosingBrace returns null for an empty document (malformed)", () => {
+    assert.strictEqual(splitRawSettingsByClosingBrace(""), null);
+  });
+
+  test("splitRawSettingsByClosingBrace returns null when there is no top-level brace", () => {
+    assert.strictEqual(splitRawSettingsByClosingBrace("just text"), null);
+    assert.strictEqual(splitRawSettingsByClosingBrace("{"), null); // unclosed
+  });
+
+  test("splitRawSettingsByClosingBrace splits at the top-level closing brace", () => {
+    const split = splitRawSettingsByClosingBrace(
+      `{
+    "a": 1,
+    "b": [1, 2]
+}`,
+    );
+    assert.ok(split, "should not be null for valid input");
+    const [beforeClose, afterClose] = split;
+    assert.strictEqual(beforeClose, `{
+    "a": 1,
+    "b": [1, 2]
+`);
+    assert.strictEqual(afterClose, "}");
+  });
+
+  test("splitRawSettingsByClosingBrace ignores } inside string values and comments", () => {
+    // The value contains a literal } and a comment with } — must NOT split there.
+    const raw = `{
+    "chat.tools.terminal.autoApprove": {"key with } inside": true},
+    // a comment with } inside
+    "tokenrhythm.modelPresets": [{"id":"precise"},{"id":"creative"}]
+}`;
+    const split = splitRawSettingsByClosingBrace(raw);
+    assert.ok(split, "should not be null for valid input");
+    const [beforeClose, afterClose] = split;
+    assert.strictEqual(afterClose, "}");
+    assert.strictEqual(beforeClose.includes("autoApprove"), true);
+    assert.strictEqual(beforeClose.includes("tokenrhythm"), true);
+    assert.strictEqual(beforeClose.trimEnd().endsWith("]"), true, "should end with the array bracket");
+  });
+
+  test("splitRawSettingsByClosingBrace handles nested arrays and objects", () => {
+    const raw = `{
+  "a": [{"x": [1, { "y": 2 }]}],
+  "b": {"c": {"d": 1}}
+}`;
+    const split = splitRawSettingsByClosingBrace(raw);
+    assert.ok(split, "should not be null for valid input");
+    const [beforeClose, afterClose] = split;
+    assert.strictEqual(afterClose, "}");
+    assert.strictEqual(beforeClose.includes("\"b\": {\"c\": {\"d\": 1}}\n"), true);
+  });
+
+  test("splitRawSettingsByClosingBrace returns null on unbalanced braces", () => {
+    assert.strictEqual(splitRawSettingsByClosingBrace("{\n  \"a\": 1\n"), null); // missing close
+    assert.strictEqual(splitRawSettingsByClosingBrace("}\n{"), null); // close before open
+  });
+
+  test("splitRawSettingsByClosingBrace returns null on double top-level close (the ]}, corruption)", () => {
+    // This is the exact corruption: parents array closed with } instead of ]
+    // and then the top-level object is closed again after the marker block.
+    const corrupted = `{
+    "inheritProfile.parents": [
+        "Base"
+    ]
+},
+    // --- INHERITED SETTINGS MARKER START --- //
+    "chat.agent.maxRequests": 300,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}`;
+    assert.strictEqual(splitRawSettingsByClosingBrace(corrupted), null);
+  });
+
+  // ── isBalancedSettingsFile ──
+
+  test("isBalancedSettingsFile accepts a normal settings file", () => {
+    assert.strictEqual(isBalancedSettingsFile(`{
+  "a": 1,
+  "b": [1, 2],
+  "c": {"d": 3}
+}`), true);
+  });
+
+  test("isBalancedSettingsFile accepts settings with strings containing braces", () => {
+    assert.strictEqual(isBalancedSettingsFile(`{
+  "chat.tools.terminal.autoApprove": {"/regex with } inside/": true},
+  // comment with } inside
+  "x": "string with } and { and ]"
+}`), true);
+  });
+
+  test("isBalancedSettingsFile rejects the ]}, corruption", () => {
+    const corrupted = `{
+    "inheritProfile.parents": [
+        "Base"
+    ]
+},
+    // --- INHERITED SETTINGS MARKER START --- //
+    "chat.agent.maxRequests": 300,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}`;
+    assert.strictEqual(isBalancedSettingsFile(corrupted), false);
+  });
+
+  test("isBalancedSettingsFile rejects unbalanced braces", () => {
+    assert.strictEqual(isBalancedSettingsFile(`{
+  "a": 1
+`), false); // missing close
+    assert.strictEqual(isBalancedSettingsFile(`{
+  "a": 1
+}}`), false); // extra close
+    assert.strictEqual(isBalancedSettingsFile(`{
+  "a": [1, 2
+}`), false); // unbalanced array
+  });
+
+  test("isBalancedSettingsFile rejects content before the opening brace", () => {
+    assert.strictEqual(isBalancedSettingsFile(`  {
+  "a": 1
+}`), true); // whitespace ok
+    assert.strictEqual(isBalancedSettingsFile(`garbage {
+  "a": 1
+}`), false); // non-whitespace before {
+  });
+
+  test("isBalancedSettingsFile rejects content after the top-level close", () => {
+    assert.strictEqual(isBalancedSettingsFile(`{
+  "a": 1
+} trailing`), false);
   });
 
   test("stripInheritedExtensions removes only extensions tagged as inherited (new marker)", () => {
