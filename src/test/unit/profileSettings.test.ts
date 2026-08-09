@@ -19,6 +19,8 @@ import {
   resolveParentExtensionsPaths,
   sortSettings,
   splitRawSettingsByClosingBrace,
+  isBalancedJsonc,
+  isSettingsDocument,
   stripInheritedExtensions,
   stripManagedProfileSettings,
   subtractSettings,
@@ -362,8 +364,139 @@ ${block}${block}}
     );
   });
 
-  test("splitRawSettingsByClosingBrace falls back to an empty object shape", () => {
-    assert.deepStrictEqual(splitRawSettingsByClosingBrace(""), ["{\n", "}\n"]);
+  test("splitRawSettingsByClosingBrace returns null for an empty document (malformed)", () => {
+    assert.strictEqual(splitRawSettingsByClosingBrace(""), null);
+  });
+
+  test("splitRawSettingsByClosingBrace returns null when there is no top-level brace", () => {
+    assert.strictEqual(splitRawSettingsByClosingBrace("just text"), null);
+    assert.strictEqual(splitRawSettingsByClosingBrace("{"), null); // unclosed
+  });
+
+  test("splitRawSettingsByClosingBrace splits at the top-level closing brace", () => {
+    const split = splitRawSettingsByClosingBrace(
+      `{
+    "a": 1,
+    "b": [1, 2]
+}`,
+    );
+    assert.ok(split, "should not be null for valid input");
+    const [beforeClose, afterClose] = split;
+    assert.strictEqual(beforeClose, `{
+    "a": 1,
+    "b": [1, 2]
+`);
+    assert.strictEqual(afterClose, "}");
+  });
+
+  test("splitRawSettingsByClosingBrace ignores } inside string values and comments", () => {
+    const raw = `{
+    "chat.tools.terminal.autoApprove": {"key with } inside": true},
+    // a comment with } inside
+    "tokenrhythm.modelPresets": [{"id":"precise"},{"id":"creative"}]
+}`;
+    const split = splitRawSettingsByClosingBrace(raw);
+    assert.ok(split, "should not be null for valid input");
+    const [beforeClose, afterClose] = split;
+    assert.strictEqual(afterClose, "}");
+    assert.strictEqual(beforeClose.includes("autoApprove"), true);
+    assert.strictEqual(beforeClose.includes("tokenrhythm"), true);
+    assert.strictEqual(beforeClose.trimEnd().endsWith("]"), true);
+  });
+
+  test("splitRawSettingsByClosingBrace returns null on unbalanced braces", () => {
+    assert.strictEqual(splitRawSettingsByClosingBrace("{\n  \"a\": 1\n"), null); // missing close
+    assert.strictEqual(splitRawSettingsByClosingBrace("}\n{"), null); // close before open
+  });
+
+  test("splitRawSettingsByClosingBrace returns null on double top-level close (the ]}, corruption)", () => {
+    const corrupted = `{
+    "inheritProfile.parents": [
+        "Base"
+    ]
+},
+    // --- INHERITED SETTINGS MARKER START --- //
+    "chat.agent.maxRequests": 300,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}`;
+    assert.strictEqual(splitRawSettingsByClosingBrace(corrupted), null);
+  });
+
+  // ── isBalancedJsonc / isSettingsDocument ──
+
+  test("isBalancedJsonc accepts settings object documents", () => {
+    assert.strictEqual(isBalancedJsonc(`{
+  "a": 1,
+  "b": [1, 2],
+  "c": {"d": 3}
+}`), true);
+  });
+
+  test("isBalancedJsonc accepts extensions.json ARRAY documents (1.8.4 regression)", () => {
+    // ⚠️ 关键回归测试：1.8.4 曾把数组误判为损坏导致扩展被清空。
+    // 通用校验必须接受顶层 [ 数组！
+    assert.strictEqual(isBalancedJsonc(`[
+  {"identifier": {"id": "a.b"}},
+  {"identifier": {"id": "c.d"}}
+]`), true);
+    assert.strictEqual(isBalancedJsonc("[]"), true);
+  });
+
+  test("isBalancedJsonc accepts strings and comments containing braces", () => {
+    assert.strictEqual(isBalancedJsonc(`{
+  "chat.tools.terminal.autoApprove": {"/regex with } inside/": true},
+  // comment with } inside
+  "x": "string with } and { and ]"
+}`), true);
+  });
+
+  test("isBalancedJsonc rejects the ]}, corruption", () => {
+    const corrupted = `{
+    "inheritProfile.parents": [
+        "Base"
+    ]
+},
+    // --- INHERITED SETTINGS MARKER START --- //
+    "chat.agent.maxRequests": 300,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}`;
+    assert.strictEqual(isBalancedJsonc(corrupted), false);
+  });
+
+  test("isBalancedJsonc rejects unbalanced braces", () => {
+    assert.strictEqual(isBalancedJsonc(`{
+  "a": 1
+`), false); // missing close
+    assert.strictEqual(isBalancedJsonc(`{
+  "a": 1
+}}`), false); // extra close
+    assert.strictEqual(isBalancedJsonc(`{
+  "a": [1, 2
+}`), false); // unbalanced array
+  });
+
+  test("isBalancedJsonc rejects content before/after top-level container", () => {
+    assert.strictEqual(isBalancedJsonc(`garbage {
+  "a": 1
+}`), false);
+    assert.strictEqual(isBalancedJsonc(`{
+  "a": 1
+} trailing`), false);
+  });
+
+  test("isSettingsDocument accepts settings objects but rejects arrays", () => {
+    // settings.json 必须是对象 → [ 顶层被拒绝
+    assert.strictEqual(isSettingsDocument(`{
+  "a": 1
+}`), true);
+    assert.strictEqual(isSettingsDocument(`[
+  {"a": 1}
+]`), false, "array is NOT a valid settings document");
+    assert.strictEqual(isSettingsDocument(`{
+  "a": 1
+`), false); // unclosed
   });
 
   test("stripInheritedExtensions removes only extensions tagged as inherited (new marker)", () => {

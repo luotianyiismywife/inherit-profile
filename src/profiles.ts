@@ -88,6 +88,8 @@ import {
   INHERITED_SETTINGS_END_MARKER,
   INHERITED_SETTINGS_START_MARKER,
   insertBeforeClose,
+  isBalancedJsonc,
+  isSettingsDocument,
   mergeFlattenedSettings,
   mergeInheritedExtensions,
   removeInsertionBoundarySetting,
@@ -514,10 +516,25 @@ export async function writeParentProfiles(
  * Reads JSONC (JSON with comments).
  * @param filePath Path to the JSON/JSONC file.
  * @returns Parsed object or {} on error.
+ *
+ * ⚠️ 通用读取：用 {@link isBalancedJsonc}（顶层 `{` 或 `[` 都合法），
+ * 因为本函数同时服务 settings.json（对象）和 extensions.json（数组）。
+ * 1.8.4 曾在此强制顶层 `{`，导致数组的 extensions.json 被误判损坏而
+ * 清空扩展——严禁再改成 settings 专属校验！
  */
 export async function readJSON(filePath: string): Promise<any> {
   try {
     const raw = await fs.readFile(filePath, "utf8");
+    // 通用结构防御：检测严重损坏（双顶层闭合、括号不平衡等），
+    // 避免后续对账基于损坏数据运行。数组（extensions.json）合法。
+    if (!isBalancedJsonc(raw)) {
+      console.warn(
+        `[settings-consistency] \`${filePath}\` is structurally unbalanced ` +
+          `(braces/brackets or stray top-level close). Refusing to treat it ` +
+          `as valid data to avoid building inheritance on corrupted content.`,
+      );
+      return {};
+    }
     return parseJSONC(raw); // handles // and /* */ comments
   } catch (error) {
     console.error(`Failed to read JSONC at ${filePath}:`, error);
@@ -904,6 +921,21 @@ async function removeInheritedSettingsFromFile(
     cleaned += "\n}";
   }
 
+  // Defensive: refuse to write back a structurally broken file. The block
+  // removal itself must never entrench `]},` corruption (e.g. when the input
+  // already had a stray top-level close from an external mid-sync rewrite).
+  // ⚠️ settings.json 必须是对象 → 用专属校验 isSettingsDocument
+  //（不能用通用 isBalancedJsonc，否则 `[` 顶层会漏过）。失败即跳过写入+告警，
+  // 绝不静默覆盖用户文件（1.8.4 教训）。
+  if (!isSettingsDocument(cleaned)) {
+    console.warn(
+      `[settings-consistency] Refusing to write cleaned settings to ` +
+        `\`${settingsPath}\`: result is not a balanced settings object. ` +
+        `Skipping write to avoid corrupting the file further.`,
+    );
+    return;
+  }
+
   console.info(
     `Removed ${removedCount} inherited settings block(s) from \`${settingsPath}\`.`,
   );
@@ -930,7 +962,21 @@ async function writeInheritedSettings(
   // Read the raw file, split it by the closing brace, and get the tab size
   // for formatting:
   const raw = await readRawSettingsFile(settingsPath);
-  const [beforeClose, afterClose] = await splitRawSettingsByClosingBrace(raw);
+
+  // Defensive: if the file is malformed (e.g. `]},` corruption from an
+  // external mid-sync rewrite), abort the write instead of entrenching the
+  // corruption — a bad file should never be further rewritten by us.
+  const split = await splitRawSettingsByClosingBrace(raw);
+  if (!split) {
+    console.warn(
+      `[settings-consistency] Refusing to write inherited settings to ` +
+        `\`${settingsPath}\`: settings file is malformed (unbalanced or ` +
+        `duplicated top-level braces). Skipping write to avoid corrupting ` +
+        `the file further.`,
+    );
+    return;
+  }
+  const [beforeClose, afterClose] = split;
   const tab = findTabValue(raw);
 
   // Build the inherited settings block:
@@ -940,6 +986,18 @@ async function writeInheritedSettings(
   // brace blocks:
   const beforeClosePlusBlock = insertBeforeClose(beforeClose, block);
   const finalSettings = beforeClosePlusBlock + afterClose;
+
+  // Final structural sanity check before writing: never write a file that
+  // doesn't round-trip as a balanced settings OBJECT (guards against edge
+  // cases in the insertion logic itself). ⚠️ 用专属校验 isSettingsDocument。
+  if (!isSettingsDocument(finalSettings)) {
+    console.warn(
+      `[settings-consistency] Refusing to write inherited settings to ` +
+        `\`${settingsPath}\`: merged result is not a balanced settings ` +
+        `object. Skipping write.`,
+    );
+    return;
+  }
 
   // Write the final settings to the settings path:
   await writeManagedFile(settingsPath, finalSettings);

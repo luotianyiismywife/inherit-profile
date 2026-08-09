@@ -717,20 +717,237 @@ export function removeTrailingComma(text: string): string {
  * 1. The content before the closing brace (excluding the closing brace).
  * 2. The content after and including the closing brace.
  *
+ * Defensively parses the file with a state machine that tracks strings,
+ * single-line comments, and multi-line comments, so `}` characters that appear
+ * inside string values (e.g. PowerShell command regexes) or comments are NOT
+ * mistaken for the top-level closing brace.
+ *
+ * If the file is malformed (no top-level `{`, unbalanced braces, or a closing
+ * brace at depth 0 that doesn't correspond to the opening brace), returns
+ * `null` so callers can abort the write instead of corrupting the file.
+ *
  * @param raw Raw `settings.json` file.
- * @returns Returns `raw` in two parts: before, and after the closing brace.
+ * @returns `[beforeClose, afterClose]`, or `null` if the file is malformed.
  */
 export function splitRawSettingsByClosingBrace(
   raw: string,
-): [beforeClose: string, afterClose: string] {
-  let closingIndex = raw.lastIndexOf("}");
-  if (closingIndex === -1) {
-    return ["{\n", "}\n"];
+): [beforeClose: string, afterClose: string] | null {
+  let depth = 0;
+  let inString = false;
+  let stringChar = "";
+  let inLineComment = false;
+  let inBlockComment = false;
+  let topLevelCloseIndex = -1;
+
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    const nextChar = raw[i + 1];
+
+    // State 1: Inside a single-line comment — skip until newline.
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+
+    // State 2: Inside a block comment — skip until `*/`.
+    if (inBlockComment) {
+      if (char === "*" && nextChar === "/") {
+        inBlockComment = false;
+        i++; // Consume the '/'
+      }
+      continue;
+    }
+
+    // State 3: Inside a string — skip escaped chars and the closing quote.
+    if (inString) {
+      if (char === "\\") {
+        i++; // Skip escaped character
+        continue;
+      }
+      if (char === stringChar) inString = false;
+      continue;
+    }
+
+    // State 4: Default (code).
+    if (char === "/" && nextChar === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (char === "/" && nextChar === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      inString = true;
+      stringChar = char;
+      continue;
+    }
+    if (char === "{") {
+      depth++;
+      continue;
+    }
+    if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        // The FIRST time we return to depth 0, that's the top-level closing
+        // brace — provided we saw an opening brace first.
+        if (topLevelCloseIndex === -1) {
+          topLevelCloseIndex = i;
+        }
+        // A second depth-0 close means we closed the top level twice — the
+        // file is malformed (e.g. `]},` corruption). Stop and bail.
+        else {
+          return null;
+        }
+      }
+      if (depth < 0) {
+        return null; // Unbalanced: more closes than opens.
+      }
+    }
   }
 
-  const beforeClose = raw.slice(0, closingIndex);
-  const afterClose = raw.slice(closingIndex);
+  // We never found the top-level closing brace (either never opened, or the
+  // file was truncated mid-write).
+  if (topLevelCloseIndex === -1) {
+    return null;
+  }
+
+  const beforeClose = raw.slice(0, topLevelCloseIndex);
+  const afterClose = raw.slice(topLevelCloseIndex);
   return [beforeClose, afterClose];
+}
+
+/**
+ * Validates that a JSONC document is structurally balanced — braces and
+ * brackets balance, strings and comments terminate, and the document has a
+ * top-level container (`{` for objects or `[` for arrays).
+ *
+ * ⚠️ 通用校验：**顶层 `{` 或 `[` 都合法**。这是刻意为之——`readJSON` 同时
+ * 服务 settings.json（对象）和 extensions.json（数组），强制顶层为 `{` 会
+ * 误杀数组（1.8.4 事故根因）。若调用方需要"必须是 settings 对象"的严格
+ * 校验，请用 {@link isSettingsDocument}。
+ *
+ * @param raw Raw JSONC content.
+ * @returns `true` if structurally sound, `false` otherwise.
+ */
+export function isBalancedJsonc(raw: string): boolean {
+  let depth = 0;
+  let bracketDepth = 0;
+  let inString = false;
+  let stringChar = "";
+  let inLineComment = false;
+  let inBlockComment = false;
+  let topLevelCloseSeen = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    const nextChar = raw[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === "*" && nextChar === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === stringChar) inString = false;
+      continue;
+    }
+
+    if (char === "/" && nextChar === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (char === "/" && nextChar === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      inString = true;
+      stringChar = char;
+      continue;
+    }
+    if (char === "{") {
+      if (topLevelCloseSeen) return false; // Content after top-level close.
+      depth++;
+      continue;
+    }
+    if (char === "}") {
+      depth--;
+      if (depth < 0) return false; // Unbalanced: more closes than opens.
+      // 顶层对象闭合 = 花括号归零 且 不在任何数组内。
+      // （顶层数组元素对象的 `}` 会让 depth 归零但 bracketDepth > 0，不算顶层闭合）
+      if (depth === 0 && bracketDepth === 0) {
+        if (topLevelCloseSeen) return false; // Second top-level close.
+        topLevelCloseSeen = true;
+      }
+      continue;
+    }
+    if (char === "[") {
+      if (topLevelCloseSeen) return false;
+      bracketDepth++;
+      continue;
+    }
+    if (char === "]") {
+      bracketDepth--;
+      if (bracketDepth < 0) return false;
+      // 顶层数组闭合 = 方括号归零 且 不在任何对象内。
+      // ⚠️ 1.8.4 教训：通用校验必须接受 extensions.json 的数组顶层！
+      if (bracketDepth === 0 && depth === 0) {
+        if (topLevelCloseSeen) return false; // Second top-level close.
+        topLevelCloseSeen = true;
+      }
+      continue;
+    }
+    // Any other non-whitespace content after the top-level close is garbage
+    // (e.g. the `]},` corruption leaves `},` after the close, or a truncated
+    // write leaves trailing text).
+    if (topLevelCloseSeen && !/\s/.test(char)) {
+      return false;
+    }
+  }
+
+  // Strings/comments must terminate, and the top level must be balanced
+  // with nothing before the opening container or after the close.
+  if (inString || inBlockComment) return false;
+  if (depth !== 0 || bracketDepth !== 0) return false;
+  if (!topLevelCloseSeen) return false;
+
+  const firstNonWhitespace = raw.search(/\S/);
+  return (
+    firstNonWhitespace !== -1 &&
+    (raw[firstNonWhitespace] === "{" || raw[firstNonWhitespace] === "[")
+  );
+}
+
+/**
+ * Validates that a JSONC document is a structurally sound **settings object**
+ * (top-level must be `{` — settings.json is always an object).
+ *
+ * ⚠️ 专属校验：仅用于 settings.json 写入路径（writeInheritedSettings /
+ * removeInheritedSettingsFromFile）。通用读取（readJSON）必须用
+ * {@link isBalancedJsonc}，因为 extensions.json 顶层是 `[`。
+ *
+ * @param raw Raw settings.json content.
+ * @returns `true` if it's a balanced object document, `false` otherwise.
+ */
+export function isSettingsDocument(raw: string): boolean {
+  if (!isBalancedJsonc(raw)) return false;
+  const firstNonWhitespace = raw.search(/\S/);
+  return firstNonWhitespace !== -1 && raw[firstNonWhitespace] === "{";
 }
 
 /**
