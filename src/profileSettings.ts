@@ -286,6 +286,32 @@ export interface ExtensionEntry {
 }
 
 /**
+ * 比较 semver 版本号（容忍前导 `v`）：
+ * a > b 返回正数，a === b 返回 0，a < b 返回负数。
+ * 空值按 0 处理（`undefined` / 空串等同 "0"）。
+ */
+export function compareVersions(
+  a: string | undefined,
+  b: string | undefined,
+): number {
+  const pa = (a ?? "")
+    .replace(/^v/i, "")
+    .split(".")
+    .map((n) => parseInt(n, 10) || 0);
+  const pb = (b ?? "")
+    .replace(/^v/i, "")
+    .split(".")
+    .map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] ?? 0;
+    const nb = pb[i] ?? 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
+/**
  * Metadata stored inside an extension entry's `metadata.inheritProfile` field.
  */
 export interface InheritedProfileMeta {
@@ -486,9 +512,16 @@ export function mergeInheritedExtensions<T extends ExtensionEntry>(
           originallyOwn.add(id);
         }
       } else if (!inheritedMap[id]) {
-        inheritedMap[id] = markExtensionAsInherited(
-          parentExt as unknown as T
-        );
+        // 子级已 inherited 且版本 >= 父级 → 保留子级条目。
+        // 子级可能是手动更新的更高版本（如 VSIX 安装），父级全量对账不应回退它。
+        const prev = inheritedFromPrev[id];
+        if (prev && compareVersions(prev.version, parentExt.version) >= 0) {
+          inheritedMap[id] = prev;
+        } else {
+          inheritedMap[id] = markExtensionAsInherited(
+            parentExt as unknown as T
+          );
+        }
       }
     }
   }
