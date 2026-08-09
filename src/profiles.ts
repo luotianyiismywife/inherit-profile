@@ -515,12 +515,17 @@ export async function writeParentProfiles(
 /**
  * Reads JSONC (JSON with comments).
  * @param filePath Path to the JSON/JSONC file.
- * @returns Parsed object or {} on error.
+ * @returns Parsed object/array, `undefined` if the file is missing or
+ *   structurally broken, or `{}` on other read errors.
  *
  * ⚠️ 通用读取：用 {@link isBalancedJsonc}（顶层 `{` 或 `[` 都合法），
  * 因为本函数同时服务 settings.json（对象）和 extensions.json（数组）。
  * 1.8.4 曾在此强制顶层 `{`，导致数组的 extensions.json 被误判损坏而
  * 清空扩展——严禁再改成 settings 专属校验！
+ *
+ * ⚠️ 结构损坏返回 `undefined`（而非 `{}`）：调用方必须区分"文件真空"和
+ * "有内容但损坏"，否则损坏的 extensions.json 会被当成空数组而触发对账
+ * 清空（1.8.4 事故的残留缺口）。settings 读取处用 `?? {}` 兜底，保持安全。
  */
 export async function readJSON(filePath: string): Promise<any> {
   try {
@@ -530,16 +535,48 @@ export async function readJSON(filePath: string): Promise<any> {
     if (!isBalancedJsonc(raw)) {
       console.warn(
         `[settings-consistency] \`${filePath}\` is structurally unbalanced ` +
-          `(braces/brackets or stray top-level close). Refusing to treat it ` +
-          `as valid data to avoid building inheritance on corrupted content.`,
+          `(braces/brackets or stray top-level close). Returning undefined ` +
+          `so callers can skip it instead of treating it as empty data.`,
       );
-      return {};
+      return undefined;
     }
     return parseJSONC(raw); // handles // and /* */ comments
   } catch (error) {
     console.error(`Failed to read JSONC at ${filePath}:`, error);
-    return {};
+    return undefined;
   }
+}
+
+/**
+ * 安全读取 extensions.json 并校验为数组。
+ *
+ * 返回 `undefined` 表示"不应参与对账"（文件不存在/损坏/格式非数组），
+ * 调用方必须**跳过该 profile 的扩展对账**（不能当成空数组，否则会清空）。
+ *
+ * @param filePath extensions.json 路径
+ * @param label 日志标识（如 profile 名）
+ * @returns 扩展数组，或 `undefined` 表示应跳过
+ */
+export async function readExtensionsArray(
+  filePath: string,
+  label: string,
+): Promise<any[] | undefined> {
+  const parsed = await readJSON(filePath);
+  if (parsed === undefined) {
+    // 文件不存在或损坏 → 跳过，不参与对账（避免当成空数组清空扩展）
+    return undefined;
+  }
+  if (!Array.isArray(parsed)) {
+    // 格式变了（VS Code 未来可能改成对象）→ 告警 + 跳过
+    console.warn(
+      `[settings-consistency] \`${filePath}\` (${label}) is not an array ` +
+        `(got ${typeof parsed}). VS Code may have changed the extensions.json ` +
+        `format. Skipping reconciliation for this profile to avoid clearing ` +
+        `extensions.`,
+    );
+    return undefined;
+  }
+  return parsed;
 }
 
 /**
@@ -569,7 +606,8 @@ async function readGlobalStorage(
   context: vscode.ExtensionContext,
 ): Promise<any> {
   const storagePath: string = getGlobalStoragePath(context);
-  return await readJSON(storagePath);
+  // storage.json 读取失败/损坏 → 空对象（调用方各自容错）
+  return (await readJSON(storagePath)) ?? {};
 }
 
 /**
@@ -814,7 +852,7 @@ async function getProfileSettings(
     // TODO: We could also collect extensions here
 
     const profileSettings = stripManagedProfileSettings(
-      flattenSettings(await readJSON(settingsPath)),
+      flattenSettings((await readJSON(settingsPath)) ?? {}),
     );
     console.debug(
       `Found ${Object.keys(profileSettings).length} settings from \`${settingsPath}\`.`,
@@ -1059,10 +1097,21 @@ async function applyInheritedSettings(
     currentProfileDirectory,
     "extensions.json",
   );
-  const parsedCurrentExtensions = await readJSON(currentExtensionsPath);
-  const currentExtensions = Array.isArray(parsedCurrentExtensions)
-    ? parsedCurrentExtensions
-    : [];
+  const parsedCurrentExtensions = await readExtensionsArray(
+    currentExtensionsPath,
+    `current ${currentProfileName}`,
+  );
+  // ⚠️ 当前 profile 的 extensions.json 无法读取/格式变化 → 跳过扩展对账，
+  // 避免基于空数据清空扩展（1.8.4 事故根源）。
+  if (parsedCurrentExtensions === undefined) {
+    console.warn(
+      `[settings-consistency] Skipping extension reconciliation for ` +
+        `\`${currentProfileName}\`: extensions.json unreadable or not an ` +
+        `array.`,
+    );
+    return;
+  }
+  const currentExtensions = parsedCurrentExtensions;
   // Collect and write inherited extensions
   const extResult = await collectInheritedExtensions(
     context,
@@ -1287,18 +1336,28 @@ async function collectInheritedExtensions(
   for (const profileName of parentProfileNames) {
     const profileDirectory = profiles[profileName];
     if (!profileDirectory) continue;
-    const rawProfileExtensions = await readJSON(
-      path.join(profileDirectory, "extensions.json")
+    const rawProfileExtensions = await readExtensionsArray(
+      path.join(profileDirectory, "extensions.json"),
+      `parent ${profileName}`,
     );
+    // ⚠️ 父级扩展读取失败/格式变化 → 跳过该父级（不参与对账），
+    // 绝不当作空数组（否则会把子级继承的扩展清空——1.8.4 事故根源）。
+    if (rawProfileExtensions === undefined) {
+      console.warn(
+        `[settings-consistency] Skipping parent \`${profileName}\` for ` +
+          `extension reconciliation: extensions.json unreadable or not an ` +
+          `array.`,
+      );
+      continue;
+    }
     // 收集禁用扩展 ID（从 SQLite state.vscdb）用于后续过滤
     const disabledIds = await getDisabledExtensions(profileDirectory);
     parentDisabledIds.push(...disabledIds);
     // 传入全部扩展（含 disabled: true）到 mergeInheritedExtensions，
     // 确保子级中 own 的扩展能被正确转为 inherited
-    const extensions = Array.isArray(rawProfileExtensions) ? rawProfileExtensions : [];
     parentProfiles.push({
       profileName,
-      extensions,
+      extensions: rawProfileExtensions,
     });
   }
 
@@ -1496,8 +1555,16 @@ async function syncProfileByName(
   const config = vscode.workspace.getConfiguration("inheritProfile");
   if (config.get<boolean>("inheritExtensions", true)) {
     const extPath = path.join(profileDir, "extensions.json");
-    const parsedExts = await readJSON(extPath);
-    const currentExtensions = Array.isArray(parsedExts) ? parsedExts : [];
+    const parsedExts = await readExtensionsArray(extPath, profileName);
+    // ⚠️ 无法读取/格式变化 → 跳过该 profile 的扩展对账（避免清空）
+    if (parsedExts === undefined) {
+      console.warn(
+        `[settings-consistency] Skipping extension reconciliation for ` +
+          `\`${profileName}\`: extensions.json unreadable or not an array.`,
+      );
+      return;
+    }
+    const currentExtensions = parsedExts;
 
     const extResult = await collectInheritedExtensions(
       context,
@@ -1643,10 +1710,15 @@ export async function removeCurrentProfileInheritedSettings(
       currentProfileDirectory,
       "extensions.json",
     );
-    const parsedCurrentExtensions = await readJSON(currentExtensionsPath);
-    const currentExtensions = Array.isArray(parsedCurrentExtensions)
-      ? parsedCurrentExtensions
-      : [];
+    const parsedCurrentExtensions = await readExtensionsArray(
+      currentExtensionsPath,
+      `current ${currentProfileName}`,
+    );
+    // 读不到/格式变化 → 跳过（无事可做，也避免基于空数组误删 own 扩展）
+    if (parsedCurrentExtensions === undefined) {
+      return;
+    }
+    const currentExtensions = parsedCurrentExtensions;
     // 先转换旧标记, 统一格式后再 strip, 避免遗漏 inheritedFromProfile 旧格式
     const converted = currentExtensions.map(convertOldMarkers);
     const filteredExtensions = stripInheritedExtensions(converted);

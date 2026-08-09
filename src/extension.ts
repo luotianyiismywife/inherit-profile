@@ -39,7 +39,7 @@
 
 import * as vscode from "vscode";
 import * as path from "path";
-import { updateCurrentProfileInheritance, removeCurrentProfileInheritedSettings, invalidateInheritanceGraph, isManagedFileSelfWrite, writeManagedFile, readJSON, getCurrentProfileDetails, showInheritanceTree, reconcileAllProfiles, getInheritanceGraph, getDescendants, writeParentProfiles, getParentNamesFromProfile } from "./profiles";
+import { updateCurrentProfileInheritance, removeCurrentProfileInheritedSettings, invalidateInheritanceGraph, isManagedFileSelfWrite, writeManagedFile, readJSON, readExtensionsArray, getCurrentProfileDetails, showInheritanceTree, reconcileAllProfiles, getInheritanceGraph, getDescendants, writeParentProfiles, getParentNamesFromProfile } from "./profiles";
 import { updateInheritedSettingsOnProfileChange, registerCurrentProfileSaveWatcher, registerParentProfileSaveWatcher } from "./profileWatchers";
 
 export async function activate(context: vscode.ExtensionContext) {
@@ -186,8 +186,15 @@ async function checkAndRestoreMarkers(context: vscode.ExtensionContext): Promise
   }
 
   const extPath = path.join(currentProfileDirectory, "extensions.json");
-  const extsRaw = await readJSON(extPath);
-  const exts = Array.isArray(extsRaw) ? extsRaw : [];
+  const exts = await readExtensionsArray(extPath, `current ${currentProfileName}`);
+  if (exts === undefined) {
+    // 读不到/格式变化 → 跳过标记恢复（避免写入空数组）
+    console.warn(
+      `[settings-consistency] Skipping extension marker restore for ` +
+        `\`${currentProfileName}\`: extensions.json unreadable or not an array.`,
+    );
+    return;
+  }
 
   const hasMarkers = exts.some(
     (e: any) => e?.metadata?.inheritProfile?.inherited
