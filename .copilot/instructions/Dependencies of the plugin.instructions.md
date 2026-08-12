@@ -14,10 +14,11 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 
 插件直接读取/写入 VS Code 用户数据目录下的文件。这些文件**不是公开接口**，VS Code 团队可随时改变其结构。
 
-### 1. `storage.json`（用户目录根）— 🔴 高
+### 1. `storage.json`（globalStorage 内）— 🔴 高
 
-**路径**：`<用户目录>/storage.json`（`globalStorageUri.fsPath` 的上级）
+**路径**：`<用户目录>/globalStorage/storage.json`（实测 1.132.1 确认；VS Code 源码 `stateResource = appSettingsHome/globalStorage/storage.json`）
 **读取函数**：`profiles.ts` → `readGlobalStorage()` / `getCurrentProfileName()` / `getProfileMap()`
+**⚠️ 插件推导**：`getGlobalStoragePath` 用 `path.resolve(context.globalStorageUri.fsPath, "../storage.json")`（globalStorageUri 含扩展 ID 后缀 → 上级即 `globalStorage/`）→ 恰好匹配 VS Code 实际位置，**不要改成 `User/` 根路径**
 
 | 字段 | 用途 | 最新版状态 (1.131) |
 |------|------|-------------------|
@@ -136,6 +137,7 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 | 2026-07-31 | 1.131 | ✅ 全部兼容 | ① `submenuitem.Profiles` 分支确认死代码（1.127 起已删），建议清理；② `mcp.json` 未纳入继承（功能缺口，见 一.5） |
 | 2026-08-05 | 1.131 | ⚠️ 发现 Settings Sync 覆盖风险 | ① **parents 必须扁平格式**（`inheritProfile.parents`），嵌套格式会被 Settings Sync 覆盖删除 → 已修复（见 一.2 风险说明）；② 新增 parents 快照 `parentSnapshots` + `getParentNamesFromProfile` 统一读取 + `restoreParentsFromSnapshot` 自动恢复；③ `getInheritedSettings`/`collectInheritedExtensions` 不再用 `config.get("parents")`（缓存问题） |
 | 2026-08-06 | 1.132 | ✅ 全部兼容 | ① 源码确认 `PROFILES_KEY`/`PROFILE_ASSOCIATIONS_KEY`（workspaces/emptyWindows）/`windowsState.lastActiveWindow.backupPath`/`DISABLED_EXTENSIONS_STORAGE_PATH`/`ItemTable` 均未变；② `engines.vscode ^1.131.0` 兼容 1.132，无需升级；③ `@types/vscode` npm 最新仍 1.125（滞后，符合预期） |
+| 2026-08-12 | 1.132.1 | ✅ 全部兼容 | ① patch 版仅修 quick-pick 工具栏 bug #329326，与插件依赖无关；② 实测 `storage.json` 在 `User/globalStorage/` 内（非 User 根），插件 `globalStorageUri/../storage.json` 推导**恰好匹配**；③ `ItemTable` 加 `ON CONFLICT REPLACE` 约束（列未变，插件只读 SELECT 无影响）；④ `extensionsIdentifiers/disabled`/`extensionsResource`/`mcpResource` 均在；⑤ 本机 1.8.6 激活正常无报错，`settingsSync.ignoredSettings` 4 key 已生效 |
 
 ---
 
@@ -146,7 +148,8 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 code --version
 
 # 查看本机 storage.json 是否还有旧键（验证 submenuitem.Profiles 死代码）
-Select-String -Path "$env:APPDATA\Code\User\storage.json" -Pattern "submenuitem.Profiles" -SimpleMatch
+# ⚠️ 1.132+ 实测 storage.json 位于 globalStorage 目录内
+Select-String -Path "$env:APPDATA\Code\User\globalStorage\storage.json" -Pattern "submenuitem.Profiles" -SimpleMatch
 
 # 查看本机 profile 目录结构与 mcp.json 存在性
 Get-ChildItem "$env:APPDATA\Code\User\profiles" -Recurse -Filter "mcp.json" | Select-Object FullName
