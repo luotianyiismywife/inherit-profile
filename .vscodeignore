@@ -18,6 +18,7 @@ out-test/**
 vscode配置文件及其配置明细(开发者自用).md
 mcp同步.md
 tsconfig.test.json
+vscode-test.config.mjs
 backup-profiles-*/
 **/*.vsix
 **/*.bak*
