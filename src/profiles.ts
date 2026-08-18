@@ -43,8 +43,8 @@
  *   - readRawSettingsFile(settingsPath)                     [async] 读取原始 settings.json
  *   - updateCurrentProfileInheritance(context, trigger?)    [async] **主要入口**：完整继承同步
  *   - removeCurrentProfileInheritedSettings(context)        [async] 清除当前 Profile 的继承内容
- *   - writeManagedFile(filePath, content)                   [async] 写入文件并记录自写
- *   - isManagedFileSelfWrite(filePath, content)             判断是否为自身的写入
+ *   - writeManagedFile(filePath, content)                   [async] 写入文件（写前内容比对 + 磁盘标记 + 记录自写）
+ *   - isManagedFileSelfWrite(filePath, content)             判断是否为自身的写入（进程内 Map + 磁盘标记两级）
  *   - invalidateInheritanceGraph()                          使反向索引缓存失效
  *
  * 内部函数（Internal）:

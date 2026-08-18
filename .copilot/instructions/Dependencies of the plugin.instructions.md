@@ -45,6 +45,7 @@ description: "Use when: 检查 VS Code 新版本兼容性、验证插件依赖�
 | `inheritProfile.parents` | ⚠️ **必须用扁平格式** `"inheritProfile.parents": [...]`，禁止嵌套 `"inheritProfile": { "parents": ... }`（见下方风险说明） |
 | `inheritProfile._insertionBoundary` | 内部门牌设置 |
 | inherited 标记块 | 插件自己写入的 `// --- INHERITED SETTINGS MARKER ...` 注释块 |
+| `settings.json.inherit-token`（1.9.0+） | 插件写的**磁盘标记文件**（`{v, instanceId, hash, ts}`），与 settings.json 同目录。**不在 Settings Sync 同步清单内**，纯本地痕迹，用于多窗口实例互相识别自写 |
 
 **风险**：🟡 中。VS Code 对 settings.json 的读写兼容所有 JSONC 变体；唯一注意点是 VS Code 1.127+ 将部分 Profile 跟踪移入内部运行时状态后，**插件通过文件 watcher 监听 settings.json 变更仍有效**（文件本身仍是事实来源）。
 
