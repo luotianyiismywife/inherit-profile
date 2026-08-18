@@ -16,6 +16,8 @@ out-test/**
 .copilot/**
 .github/**
 vscode配置文件及其配置明细(开发者自用).md
+mcp同步.md
+tsconfig.test.json
 backup-profiles-*/
 **/*.vsix
 **/*.bak*

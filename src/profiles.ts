@@ -107,7 +107,12 @@ import {
   markExtensionAsOptedOut,
   INHERITED_PROFILE_META_KEY,
 } from "./profileSettings";
-import { SelfWriteTracker } from "./selfWriteTracker";
+import {
+  SelfWriteTracker,
+  readWriteTokenHash,
+  sha1Hex,
+  writeWriteToken,
+} from "./selfWriteTracker";
 
 /**
  * Tracks content written to profile files by this extension so that file
@@ -121,12 +126,34 @@ const selfWriteTracker = new SelfWriteTracker();
  * so that file watchers set up to react to external edits of this file (see
  * `isManagedFileSelfWrite`) can recognise and ignore the change this write is
  * about to cause.
+ *
+ * 防抖/收敛（双保险）:
+ *   ① **写前内容比对**：写入前先读磁盘，若内容已与目标一致则**跳过写入**——
+ *      不产生任何文件系统事件，从源头减少无谓触发。多窗口场景下，各实例
+ *      计算出的最终内容一致时，第二个实例直接什么都不做。
+ *   ② **磁盘标记**：实际写入前先落 `<filePath>.inherit-token` 标记文件，
+ *      再写正文。其他实例（独立进程，内存中的 SelfWriteTracker 互相不可见）
+ *      的 watcher 收到正文变更时读标记比对 sha1，命中即识别为兄弟实例自写，
+ *      不再触发 reconcile——彻底切断跨窗口的互相触发循环。
  */
 async function writeManagedFile(
   filePath: string,
   content: string,
 ): Promise<void> {
+  // ① 写前内容比对: 与磁盘当前内容完全一致 → 跳过写入
+  try {
+    const current = await fs.readFile(filePath, "utf8");
+    if (current === content) {
+      return;
+    }
+  } catch {
+    // 文件不存在或不可读 → 照常写入
+  }
+
+  // ② 进程内记录（同实例快速路径）
   selfWriteTracker.record(filePath, content);
+  // ③ 磁盘标记先落盘，再写正文（保证 watcher 触发时标记可读）
+  writeWriteToken(filePath, content);
   await fs.writeFile(filePath, content, "utf8");
 }
 
@@ -138,6 +165,14 @@ export { writeManagedFile };
  * {@link writeManagedFile}) wrote exactly `content`, meaning a file watcher
  * observing this change is seeing this extension's own write rather than an
  * external edit.
+ *
+ * 两级判断：
+ *   ① 进程内精确匹配（同实例快速路径）——内存 Map 记录与当前内容逐字节一致。
+ *   ② 磁盘标记哈希比对（跨实例路径）——`<filePath>.inherit-token` 标记中的
+ *      hash 与当前内容 sha1 一致，说明是**其他窗口/进程**的扩展实例写的。
+ *      多个 VS Code 窗口各有独立扩展宿主，内存记录互不可见，只有磁盘标记
+ *      是共享痕迹。用户/Settings Sync 等外部写入不会写标记，哈希必不匹配。
+ *
  * @param filePath Absolute path to the file that changed.
  * @param content The file's current content.
  */
@@ -145,7 +180,13 @@ export function isManagedFileSelfWrite(
   filePath: string,
   content: string,
 ): boolean {
-  return selfWriteTracker.isSelfWrite(filePath, content);
+  // ① 同实例精确匹配
+  if (selfWriteTracker.isSelfWrite(filePath, content)) {
+    return true;
+  }
+  // ② 磁盘标记匹配: 其他实例经 writeManagedFile 写入时也留下了标记
+  const tokenHash = readWriteTokenHash(filePath);
+  return tokenHash !== undefined && tokenHash === sha1Hex(content);
 }
 
 // ---------------------------------------------------------------------------
