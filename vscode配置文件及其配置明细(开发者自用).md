@@ -12,7 +12,7 @@ description: "Use when: 需要了解用户本机 VS Code Profile 体系（Base/B
 
 ```
 Base（通用底座·19个）
-├── Base->Dev（通用开发工具·59个 含继承自 Base）
+├── Base->Dev（通用开发工具·63个 含继承自 Base）
 └── Base->Writing（文字写作·19个，纯继承 Base，无 own 扩展）
 
 Test（未归类文档工具，3个，仅文档规划）
@@ -91,13 +91,13 @@ Test（未归类文档工具，3个，仅文档规划）
 
 ---
 
-### 2.2 Base->Dev · 通用开发（59 个扩展，含继承自 Base）
+### 2.2 Base->Dev · 通用开发（63 个扩展，含继承自 Base）
 
 **UUID:** `-367578e4`
 
 **继承:** `inheritProfile.parents: ["Base"]`
 
-**扩展构成:** own 41 个（下表）+ 继承 Base 19 个 − 重复的 inherit-profile-plus 1 个 = **59 个**
+**扩展构成:** own 45 个（下表）+ 继承 Base 19 个 − 重复的 inherit-profile-plus 1 个 = **63 个**
 
 **Settings:**
 
@@ -162,6 +162,10 @@ Test（未归类文档工具，3个，仅文档规划）
 | `ms-azuretools.vscode-containers`        | Dev Containers             | 容器开发环境      |
 | `christian-kohler.npm-intellisense`      | npm Intellisense           | npm 提示          |
 | `dbaeumer.vscode-eslint`                 | ESLint                     | JS 代码检查       |
+| `ms-vscode.extension-test-runner`        | Extension Test Runner      | 扩展测试运行      |
+| `ms-vscode.vscode-github-issue-notebooks` | GitHub Issue Notebooks    | GitHub Issue 笔记 |
+| `ms-vscode-remote.remote-containers`     | Remote - Containers        | 容器远程开发      |
+| `typescriptteam.native-preview`          | TypeScript 7               | TypeScript 原生预览 |
 
 ### 2.4 Base->Writing · 文字写作（19 个扩展 · 纯继承 Base）
 
@@ -266,7 +270,7 @@ Test（未归类文档工具，3个，仅文档规划）
 ```mermaid
 graph TB
     Base["Base (19个)"]
-    Dev["Base->Dev (59个)<br/>own 41个: prettier, errorlens, dependi<br/>+Python, Go, Java, 前端, ESLint, npm<br/>+lldb, xml, shell, debug<br/>+PowerShell, Rust, .NET, GitLab<br/>+Dev Containers"]
+    Dev["Base->Dev (63个)<br/>own 45个: prettier, errorlens, dependi<br/>+Python, Go, Java, 前端, ESLint, npm<br/>+lldb, xml, shell, debug<br/>+PowerShell, Rust, .NET, GitLab<br/>+Dev Containers, Extension Test Runner,<br/>+GitHub Issue Notebooks, TypeScript 7"]
     Writing["Base->Writing (19个)<br/>纯继承 Base，无 own 扩展"]
 
     Base -->|inherit| Dev
