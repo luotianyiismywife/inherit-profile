@@ -300,6 +300,40 @@ ${block}${block}}
 `);
   });
 
+  test("stripInheritedSettingsBlocks removes an out-of-object residual block without leaving a duplicate top-level brace", () => {
+    // 2026-08-21 实际损坏形态：对象内块（含对象闭合 }）+ 对象外残留块（自带一个
+    // 顶层 }）。旧逻辑删除残留块后产生 `}}`，isSettingsDocument 校验失败 →
+    // removeInheritedSettingsFromFile 拒绝写入，插件无法自愈。
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(
+      `{
+    "own.setting": true,
+    // --- INHERITED SETTINGS MARKER START --- //
+    "inherited.setting": 1,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}
+   // --- INHERITED SETTINGS MARKER START --- //
+    // WARNING: Do not remove the inherited settings start and end markers.
+    //          The markers are used to identify inserted inherited settings.
+    "dup.setting": 2,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}
+`,
+    );
+    assert.strictEqual(removedCount, 2);
+    assert.ok(cleaned.includes('"own.setting": true'));
+    assert.ok(!cleaned.includes("MARKER"));
+    assert.ok(!cleaned.includes("_insertionBoundary"));
+    // 关键：不能留下 `}}`，必须仍是合法 settings 对象
+    const { cleaned: finalCleaned } = stripInheritedSettingsBlocks(cleaned);
+    assert.strictEqual(finalCleaned, cleaned); // 幂等
+    assert.ok(!cleaned.includes("}}"));
+    assert.strictEqual(cleaned.trimEnd().endsWith("}"), true);
+    // 且结果必须能被 isSettingsDocument 接受
+    assert.strictEqual(isSettingsDocument(cleaned), true);
+  });
+
   test("stripInheritedSettingsBlocks stops at an invalid marker order", () => {
     // END before START (e.g. after a VS Code rewrite lost the START marker).
     const { cleaned, removedCount } = stripInheritedSettingsBlocks(

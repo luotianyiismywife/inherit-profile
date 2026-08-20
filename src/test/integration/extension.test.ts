@@ -233,6 +233,51 @@ suite("Extension integration", () => {
     );
   });
 
+  test("preserves the existing inherited block when the parent profile is missing from storage.json", async () => {
+    // 2026-08-21 实测根因：Settings Sync 并发写 storage.json 时，
+    // getProfileMap 读到不完整列表 → 父级解析失败 → getInheritedSettings 空
+    // → 旧逻辑"先删块后写回、算空就丢块"。本测试验证：父级缺失时保留现有块。
+    const currentProfile: ProfileDescriptor = {
+      name: "Child",
+      location: "child-profile",
+    };
+    // 故意不把 Parent 写进 storage.json（模拟父级目录无法解析）
+    await writeStorage(sandboxRoot, currentProfile);
+    await writeProfileSettings(
+      sandboxRoot,
+      currentProfile,
+      `{
+    "own.setting": true,
+    // --- INHERITED SETTINGS MARKER START --- //
+    "files.autoSave": "off",
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false
+}
+`,
+    );
+    await writeProfileExtensions(sandboxRoot, currentProfile, [
+      createExtension("esbenp.prettier-vscode", {
+        inheritProfile: { inherited: true },
+      }),
+    ]);
+
+    // 父级声明在配置里，但 storage.json 中不存在该 profile
+    await updateConfig("parents", ["Parent"]);
+    await updateCurrentProfileInheritance(createContext(sandboxRoot));
+
+    const updatedSettingsPath = path.join(
+      getProfileDirectory(sandboxRoot, currentProfile),
+      "settings.json",
+    );
+    const updatedSettingsRaw = await fs.readFile(updatedSettingsPath, "utf8");
+
+    // 防御生效：块必须保留（未被删除）
+    assert.ok(updatedSettingsRaw.includes(INHERITED_SETTINGS_START_MARKER));
+    assert.ok(updatedSettingsRaw.includes(INHERITED_SETTINGS_END_MARKER));
+    assert.ok(updatedSettingsRaw.includes("files.autoSave"));
+    assert.ok(updatedSettingsRaw.includes("own.setting"));
+  });
+
   test("falls back to the emptyWindows profile association when no profile menu or workspace matches", async () => {
     const currentProfile: ProfileDescriptor = {
       name: "Custom",

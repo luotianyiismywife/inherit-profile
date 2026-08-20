@@ -595,9 +595,19 @@ export function stripInheritedSettingsBlocks(raw: string): {
     }
 
     const before = cleaned.slice(0, startIndex);
-    const after = removeInsertionBoundarySetting(
+    let after = removeInsertionBoundarySetting(
       cleaned.slice(endIndex + INHERITED_SETTINGS_END_MARKER.length),
     );
+
+    // 对象外残留块（2026-08-21 实测损坏形态）：块自带一个顶层 `}`，与文件对象
+    // 自身的 `}` 重复。删除该块后 before 已以 `}` 结尾、after 又以 `}` 开头 →
+    // after 开头的 `}` 是残留块自己的闭合，一并移除，避免产生 `}}` 使
+    // isSettingsDocument 校验失败、removeInheritedSettingsFromFile 拒绝写入
+    // （插件无法自愈）。对象内块不满足该判定（before 以 `,`/`{` 结尾）。
+    if (before.trimEnd().endsWith("}") && after.trimStart().startsWith("}")) {
+      after = after.replace(/^\s*\}/, "");
+    }
+
     cleaned = before.trimEnd() + after.trimEnd();
     removedCount++;
   }

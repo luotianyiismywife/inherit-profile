@@ -1112,8 +1112,28 @@ async function applyInheritedSettings(
     "settings.json",
   );
 
-  // Remove the inherited settings from the current profile:
-  await removeInheritedSettingsFromFile(currentProfilePath);
+  // 先解析父级列表（文件 → 快照 → 配置回退），用于防御性校验。
+  const parentProfiles = await getParentNamesFromProfile(
+    context,
+    currentProfileName,
+    currentProfileDirectory,
+  );
+
+  // 防御：父级目录无法解析（storage.json 读取失败 / Settings Sync 并发写
+  // 导致 profile 列表不完整）时，**跳过本次 reconcile，保留现有 inherited
+  // 块**，绝不执行"先删块后写回、算空就丢块"的破坏路径（1.8.4 教训在
+  // settings 侧的对应防御，2026-08-21 实测根因）。
+  const missingParents = parentProfiles.filter((name) => !profiles[name]);
+  if (missingParents.length > 0) {
+    console.warn(
+      `[settings-consistency] Skipping settings reconciliation for ` +
+        `\`${currentProfileName}\`: cannot resolve parent profile ` +
+        `director${missingParents.length > 1 ? "ies" : "y"}: ` +
+        `${missingParents.join(", ")}. Keeping existing inherited ` +
+        `settings block to avoid data loss.`,
+    );
+    return;
+  }
 
   // Get the settings that the current profile should inherit:
   const inheritedSettings = await getInheritedSettings(context);
@@ -1121,6 +1141,22 @@ async function applyInheritedSettings(
   console.info(
     `Found ${totalInheritedSettings} inherited settings for \`${currentProfileName}\` profile.`,
   );
+
+  // 防御：声明了父级却算不出任何继承设置（父级 settings.json 读取失败/损坏
+  // 等异常）→ 跳过删除，保留现有块，避免"只删不写"造成块永久丢失。
+  if (parentProfiles.length > 0 && totalInheritedSettings === 0) {
+    console.warn(
+      `[settings-consistency] Skipping inherited settings removal for ` +
+        `\`${currentProfileName}\`: parent profile(s) declared but no ` +
+        `inheritable settings resolved. Keeping existing block to avoid ` +
+        `data loss.`,
+    );
+    return;
+  }
+
+  // Remove the inherited settings from the current profile:
+  await removeInheritedSettingsFromFile(currentProfilePath);
+
   if (totalInheritedSettings > 0) {
     console.info(
       `Merging ${totalInheritedSettings} settings into \`${currentProfilePath}\`.`,
@@ -1581,15 +1617,27 @@ async function syncProfileByName(
   }
 
   // 1. 设置继承
-  await removeInheritedSettingsFromFile(settingsPath);
-
   const parentProfileSettings = await getProfileSettings(context, parentNames);
   const ownSettings = stripManagedProfileSettings(flattenSettings(rawSettings));
   const inheritedSettings = sortSettings(
     subtractSettings(parentProfileSettings, ownSettings),
   );
-  if (Object.keys(inheritedSettings).length > 0) {
-    await writeInheritedSettings(settingsPath, inheritedSettings);
+
+  // 防御：声明了父级却算不出任何继承设置（父级目录解析失败 / 父级
+  // settings.json 读取失败等异常）→ 跳过删除，保留现有块，避免
+  // "先删后写、算空就丢块"造成 inherited 块永久丢失（2026-08-21 实测根因，
+  // 与 applyInheritedSettings 同款防御）。
+  if (parentNames.length > 0 && Object.keys(inheritedSettings).length === 0) {
+    console.warn(
+      `[settings-consistency] Skipping inherited settings removal for ` +
+        `\`${profileName}\`: parent profile(s) declared but no inheritable ` +
+        `settings resolved. Keeping existing block to avoid data loss.`,
+    );
+  } else {
+    await removeInheritedSettingsFromFile(settingsPath);
+    if (Object.keys(inheritedSettings).length > 0) {
+      await writeInheritedSettings(settingsPath, inheritedSettings);
+    }
   }
 
   // 2. 扩展继承
