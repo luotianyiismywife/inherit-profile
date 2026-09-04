@@ -8,16 +8,18 @@
 
 | 级别 | 路径 | 说明 |
 |------|------|------|
-| 用户/Profile 级 | `<用户目录>/profiles/<id>/mcp.json` | **主要位置**。VS Code 1.95+ 起 MCP 服务器按 Profile 存储（`mcpResource: joinPath(location, 'mcp.json')`） |
-| 工作区级 | `<项目>/.vscode/mcp.json` | 仅当前工作区生效，随仓库同步 |
-| 项目级（Claude 风格） | `<项目>/.mcp.json` | 工作区根目录的 `{ "mcpServers": {...} }` 格式，VS Code 1.1xx 起也支持发现 |
-| 历史位置（已废弃） | 用户 `settings.json` 的 `mcp.servers` | 旧版存这里，新版已迁移到独立 `mcp.json` |
+| 用户/Profile 级 | `<用户目录>/profiles/<id>/mcp.json` | **主要位置**。VS Code **1.102 起**（2025-07-09 发布，June 2025 里程碑）MCP 成为一等资源按 Profile 存储（`mcpResource: joinPath(location, 'mcp.json')`，源码 `userDataProfile.ts`） |
+| 工作区级（多根） | `.code-workspace` 文件的 `settings.mcp` 段 | 仅多根工作区有 `workspace.configuration` 时有效；源码 `mcpWorkbenchService.ts` `getWorkspaceMcpConfigPath`（`section: ['settings', 'mcp']`） |
+| 工作区文件夹级 | `<项目>/.vscode/mcp.json` | 仅当前文件夹生效，随仓库同步（`WORKSPACE_STANDALONE_CONFIGURATIONS['mcp']`） |
+| 项目级（Claude 风格） | `<项目>/.mcp.json` | 工作区根目录的 `{ "mcpServers": {...} }` 格式（agent host 的 Claude 会话也读；.mcp.json 可为扁平 `{name: config}` map） |
+| 外部应用发现（可选） | Copilot CLI `~/.copilot/mcp-config.json`、Windsurf、Cursor 等 | 受 `chat.mcp.discovery.enabled` 控制（源码 `mcpConfiguration.ts` ExternalDiscoverySource） |
+| 历史位置（已废弃） | 用户/Profile `settings.json` 的 `mcp` 键（`mcp.servers`） | 1.98~1.101 的旧格式。1.102 起启动时被 `mcpMigration.ts` 自动迁移到独立 `mcp.json` 并删除原键；再写入会弹错误通知（"MCP servers should no longer be configured in user settings"）。`.vscode/settings.json` 写 `mcp` 键同样无效 |
 
 ### mcp.json 文件格式
 
 ```jsonc
 {
-  // VS Code 官方格式（1.95+）
+  // VS Code 官方格式（1.102+，profile 级 / .vscode/mcp.json）
   "servers": {
     "my-server": {
       "type": "stdio",        // stdio | sse | http
