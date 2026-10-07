@@ -13,12 +13,14 @@ vsc-extension-quickstart.md
 !node_modules/sql.js/dist/sql-wasm.wasm
 scripts/**
 out-test/**
+out/test/**
 .copilot/**
 .github/**
 vscode配置文件及其配置明细(开发者自用).md
 mcp同步.md
 tsconfig.test.json
 vscode-test.config.mjs
+vscode-test.local.mjs
 backup-profiles-*/
 **/*.vsix
 **/*.bak*
