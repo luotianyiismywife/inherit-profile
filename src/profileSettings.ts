@@ -572,8 +572,13 @@ export function removeInsertionBoundarySetting(after: string): string {
  * and the next sync would add yet another block on top, causing unbounded
  * file growth.
  *
- * If a marker pair is invalid (END appears before START, or only one marker
- * exists), removal stops and the file is left as-is from that point on.
+ * An **orphan END marker** (an END that appears before the first START, or
+ * with no START at all) is the residue of a historical bug that stacked
+ * blocks. It is removed (together with the boundary line that follows it) so
+ * the file can self-heal, instead of silently accumulating another block on
+ * every reconcile. An orphan START (a START with no END after it) is left
+ * untouched, since the extent of its block is unknown and removing it could
+ * delete user settings.
  *
  * @param raw Raw settings.json content.
  * @returns The cleaned content and how many blocks were removed.
@@ -589,8 +594,31 @@ export function stripInheritedSettingsBlocks(raw: string): {
     const startIndex = cleaned.indexOf(INHERITED_SETTINGS_START_MARKER);
     const endIndex = cleaned.indexOf(INHERITED_SETTINGS_END_MARKER);
 
-    // No markers left, or markers are in an invalid order — stop.
-    if (startIndex === -1 || endIndex === -1 || endIndex < startIndex) {
+    // No markers left — done.
+    if (startIndex === -1 && endIndex === -1) {
+      break;
+    }
+
+    // Orphan END marker: an END with no valid preceding START (it appears
+    // before the first START, or there is no START at all). Remove the stray
+    // END line and the boundary line that follows it, then keep looping so any
+    // remaining valid blocks are still cleaned up. Without this, `removedCount`
+    // stays 0 and the caller bails out, so the file can never self-heal.
+    if (endIndex !== -1 && (startIndex === -1 || endIndex < startIndex)) {
+      const before = cleaned.slice(0, endIndex).trimEnd();
+      let after = cleaned.slice(
+        endIndex + INHERITED_SETTINGS_END_MARKER.length,
+      );
+      after = removeInsertionBoundarySetting(after);
+      cleaned = before + after;
+      removedCount++;
+      continue;
+    }
+
+    // Orphan START marker: a START with no END after it. The extent of the
+    // block is unknown, so stop here and leave the file untouched rather than
+    // risk deleting user settings.
+    if (endIndex === -1) {
       break;
     }
 

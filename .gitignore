@@ -20,6 +20,7 @@ Thumbs.db
 !.vscode/tasks.json
 .vscode-test/*
 .vscode-test.mjs
+.vscode-test.local.mjs
 
 # TypeScript build cache:
 *.tsbuildinfo
@@ -31,5 +32,5 @@ coverage/
 *.vsix
 
 
-# TokenRhythm 扩展运行时日志（自动生成，勿提交）
+# TokenRhythm 锟斤拷展锟斤拷锟斤拷时锟斤拷志锟斤拷锟皆讹拷锟斤拷锟缴ｏ拷锟斤拷锟结交锟斤拷
 .copilot/model-sync-log.md

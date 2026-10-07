@@ -153,26 +153,20 @@ suite("Extension integration", () => {
       await fs.readFile(updatedExtensionsPath, "utf8"),
     ) as Array<{ identifier: { id: string }; metadata?: Record<string, any> }>;
 
+    // 顺序：own 在前、inherited 在后；inherited 按父级声明顺序（Default → Parent）。
+    // prettier 原本是子级 own，但父级 Parent 也提供 → own→inherited（记入 originallyOwn）。
     assert.deepStrictEqual(
       updatedExtensions.map((extension) => extension.identifier.id),
       [
-        "esbenp.prettier-vscode",
         "ms-python.python",
+        "esbenp.prettier-vscode",
         "dbaeumer.vscode-eslint",
       ],
     );
-    assert.strictEqual(
-      updatedExtensions[0].metadata?.inheritedFromProfile,
-      undefined,
-    );
-    assert.strictEqual(
-      updatedExtensions[1].metadata?.inheritedFromProfile,
-      "Default",
-    );
-    assert.strictEqual(
-      updatedExtensions[2].metadata?.inheritedFromProfile,
-      "Parent",
-    );
+    // 三个扩展都标记为继承（新格式 metadata.inheritProfile.inherited）
+    for (const ext of updatedExtensions) {
+      assert.strictEqual(ext.metadata?.inheritProfile?.inherited, true);
+    }
   });
 
   test("removes managed settings and inherited extensions from the current profile", async () => {

@@ -43,6 +43,14 @@ import { updateCurrentProfileInheritance, removeCurrentProfileInheritedSettings,
 import { updateInheritedSettingsOnProfileChange, registerCurrentProfileSaveWatcher, registerParentProfileSaveWatcher } from "./profileWatchers";
 
 export async function activate(context: vscode.ExtensionContext) {
+  // 集成测试环境下跳过自动对账/监听：测试用例直接调用底层函数
+  // （updateCurrentProfileInheritance / register*Watcher 等），扩展的自动激活
+  // 会与测试争抢全局配置（inheritProfile.parents）和用户设置文件写入，
+  // 导致 "File Modified Since" / "Overlapping edit" 等竞态失败。
+  if (context.extensionMode === vscode.ExtensionMode.Test) {
+    return;
+  }
+
   // 1. 注册命令 (同现有)
   context.subscriptions.push(
     vscode.commands.registerCommand(

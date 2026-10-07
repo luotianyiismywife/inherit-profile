@@ -334,8 +334,37 @@ ${block}${block}}
     assert.strictEqual(isSettingsDocument(cleaned), true);
   });
 
-  test("stripInheritedSettingsBlocks stops at an invalid marker order", () => {
-    // END before START (e.g. after a VS Code rewrite lost the START marker).
+  test("stripInheritedSettingsBlocks removes an orphan END marker (END before START)", () => {
+    // 历史 bug 遗留的损坏形态：孤儿 END 出现在 START 之前。旧逻辑直接 break，
+    // removedCount 恒为 0 → 插件无法自愈、每次 reconcile 再堆一块。
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(
+      `{
+    "own.setting": true,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false,
+    // --- INHERITED SETTINGS MARKER START --- //
+    // WARNING: Do not remove the inherited settings start and end markers.
+    "inherited.setting": 1,
+    // --- INHERITED SETTINGS MARKER END --- //
+    "inheritProfile._insertionBoundary": false,
+    "inheritProfile.parents": ["Base"]
+}
+`,
+    );
+    assert.strictEqual(removedCount, 2);
+    assert.ok(cleaned.includes('"own.setting": true'));
+    assert.ok(cleaned.includes('"inheritProfile.parents": ["Base"]'));
+    assert.ok(!cleaned.includes("MARKER"));
+    assert.ok(!cleaned.includes("_insertionBoundary"));
+    assert.strictEqual(isSettingsDocument(cleaned), true);
+    // 幂等：再跑一次不应有任何变化
+    const { cleaned: again, removedCount: againCount } =
+      stripInheritedSettingsBlocks(cleaned);
+    assert.strictEqual(againCount, 0);
+    assert.strictEqual(again, cleaned);
+  });
+
+  test("stripInheritedSettingsBlocks removes a lone END marker with no START", () => {
     const { cleaned, removedCount } = stripInheritedSettingsBlocks(
       `{
     "own.setting": true,
@@ -344,13 +373,23 @@ ${block}${block}}
 }
 `,
     );
-    assert.strictEqual(removedCount, 0);
-    assert.strictEqual(cleaned, `{
+    assert.strictEqual(removedCount, 1);
+    assert.ok(!cleaned.includes("MARKER"));
+    assert.ok(cleaned.includes('"orphan": 1'));
+    assert.strictEqual(isSettingsDocument(cleaned), true);
+  });
+
+  test("stripInheritedSettingsBlocks leaves an orphan START marker untouched", () => {
+    // 只有 START 没有 END：块的范围未知，保守起见保持原样（绝不误删用户设置）。
+    const input = `{
     "own.setting": true,
-    // --- INHERITED SETTINGS MARKER END --- //
-    "orphan": 1
+    // --- INHERITED SETTINGS MARKER START --- //
+    "maybe.inherited": 1
 }
-`);
+`;
+    const { cleaned, removedCount } = stripInheritedSettingsBlocks(input);
+    assert.strictEqual(removedCount, 0);
+    assert.strictEqual(cleaned, input);
   });
 
   test("findTabValue detects tabs and falls back to four spaces", () => {

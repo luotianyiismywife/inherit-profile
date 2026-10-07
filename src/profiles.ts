@@ -915,9 +915,18 @@ async function getCurrentProfileSettings(
   context: vscode.ExtensionContext,
 ): Promise<Record<string, string>> {
   const currentProfileName = await getCurrentProfileName(context);
-  return flattenSettings(
-    await getProfileSettings(context, [currentProfileName]),
-  );
+  const profileMap = await getProfileMap(context);
+  const profilePath = profileMap[currentProfileName];
+  if (!profilePath) {
+    return {};
+  }
+  const settingsPath = path.join(profilePath, "settings.json");
+  // ⚠️ 剥离 inherited 块后再 flatten：块内的设置是上次继承写入的，
+  // 不是用户自己的设置。否则 subtractSettings 会把它们当作 own 减掉，
+  // 导致继承设置算空（与 syncProfileByName 同款修复）。
+  const raw = await readRawSettingsFile(settingsPath);
+  const { cleaned } = stripInheritedSettingsBlocks(raw);
+  return flattenSettings(parseJSONC(cleaned) ?? {});
 }
 
 /**
@@ -991,6 +1000,19 @@ async function removeInheritedSettingsFromFile(
     stripInheritedSettingsBlocks(raw);
 
   if (removedCount === 0) {
+    // 区分"文件里根本没有标记"（正常早退）与"有标记却一个都没删掉"
+    // （未识别的损坏形态，例如只有 START 没有 END 的孤儿 START）——后者
+    // 必须告警，而不是静默返回，否则问题会被无声吞掉。
+    if (
+      raw.includes(INHERITED_SETTINGS_START_MARKER) ||
+      raw.includes(INHERITED_SETTINGS_END_MARKER)
+    ) {
+      console.warn(
+        `[settings-consistency] Found inherited settings markers in ` +
+          `\`${settingsPath}\` but removed none; the file may be in an ` +
+          `unrecognised corrupted state. Leaving it untouched.`,
+      );
+    }
     return; // markers not found, leave file alone
   }
 
@@ -1238,11 +1260,29 @@ async function applyInheritedSettings(
       updatedSettings = applyEdits(updatedSettings, editsN1);
     }
 
-    const edits: import("jsonc-parser").Edit[] = [
-      ...modify(updatedSettings, ["inheritProfile._originallyOwnExtensions"], originallyOwn, options),
-      ...modify(updatedSettings, ["inheritProfile.optedOutExtensions"], optedOut, options),
-    ];
-    updatedSettings = applyEdits(updatedSettings, edits);
+    // 依次写入两个扁平 key。
+    // ⚠️ 不能把两次 modify 合并成一次 applyEdits：当两个 key 都不存在时，
+    // jsonc-parser 会在同一位置插入，产生重叠编辑，applyEdits 抛
+    // "Overlapping edit"（2026-10-07 复现：子 profile 拥有父 profile 也提供的
+    // 扩展时 originallyOwn 非空，首次 reconcile 必现）。逐个 apply 即可。
+    updatedSettings = applyEdits(
+      updatedSettings,
+      modify(
+        updatedSettings,
+        ["inheritProfile._originallyOwnExtensions"],
+        originallyOwn,
+        options,
+      ),
+    );
+    updatedSettings = applyEdits(
+      updatedSettings,
+      modify(
+        updatedSettings,
+        ["inheritProfile.optedOutExtensions"],
+        optedOut,
+        options,
+      ),
+    );
     await writeManagedFile(currentProfilePath, updatedSettings);
   }
 
@@ -1618,7 +1658,20 @@ async function syncProfileByName(
 
   // 1. 设置继承
   const parentProfileSettings = await getProfileSettings(context, parentNames);
-  const ownSettings = stripManagedProfileSettings(flattenSettings(rawSettings));
+  // ⚠️ 计算 own 前必须先剥离 inherited 块：块内的设置是上次继承写入的，
+  // 不是用户自己的设置。否则 subtractSettings 会把它们当作 own 减掉，
+  // 导致 inheritedSettings 恒为空 → "删块但不写回"，继承设置永久丢失
+  // （2026-10-07 集成测试实测：watcher 触发 reconcileAllProfiles 后
+  // Child 的继承设置被清空且不再写回）。
+  // ⚠️ 必须对**原始文件文本**剥离（标记是注释，readJSON 解析后注释已丢失，
+  // 对解析结果 JSON.stringify 再剥离是无效的）。
+  const rawSettingsText = await readRawSettingsFile(settingsPath);
+  const { cleaned: rawWithoutBlocks } = stripInheritedSettingsBlocks(
+    rawSettingsText,
+  );
+  const ownSettings = stripManagedProfileSettings(
+    flattenSettings(parseJSONC(rawWithoutBlocks) ?? {}),
+  );
   const inheritedSettings = sortSettings(
     subtractSettings(parentProfileSettings, ownSettings),
   );
@@ -1847,11 +1900,11 @@ export async function removeCurrentProfileInheritedSettings(
         );
       }
     }
-    // 再清扁平 key（重置为空数组而非删除, 避免 jsonc-parser 处理 undefined 行为不确定）
+    // 再删扁平 key（彻底清理，避免残留空数组污染用户 settings.json）
     for (const key of ["inheritProfile._originallyOwnExtensions", "inheritProfile.optedOutExtensions"] as const) {
       updated = applyEdits(
         updated,
-        modify(updated, [key], [], options),
+        modify(updated, [key], undefined, options),
       );
     }
     if (updated !== raw) {
