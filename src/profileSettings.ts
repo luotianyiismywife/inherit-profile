@@ -494,18 +494,34 @@ export function mergeInheritedExtensions<T extends ExtensionEntry>(
   }
 
   // 4. 清理: 原本 inherited 但父级不再提供
+  // ⚠️ 无父级场景（parentProfiles 为空，通常是根 Profile）: **绝不清理任何**
+  //    inherited 扩展。根 Profile 的扩展天生应全是 own——对账时出现 inherited
+  //    标记必然是异常（VS Code 降级 / Settings Sync 覆盖删除父级元数据导致
+  //    父级信息丢失，见 https://github.com/luotianyiismywife/inherit-profile/issues/5）。
+  //    此时若按"父级不再提供"丢弃，扩展将
+  //    永久丢失。因此统一**退还为 own 保留**，待父级恢复后由下次对账重新接管。
+  //    即使父级全部读取失败被跳过（profile 目录解析失败等），退还为 own 也
+  //    比丢弃安全——不丢数据，父级恢复后会自动转回 inherited。
+  const noParents = parentProfiles.length === 0;
   const newOptedOut: string[] = [];
   for (const [id, ext] of Object.entries(inheritedFromPrev)) {
     if (inheritedMap[id]) continue; // 父级仍有, 保留
+
+    if (noParents) {
+      // 无父级: 一律退还为 own（保护数据, 等父级恢复后重新对账）。
+      // 若原本记录在 originallyOwn，退还为 own 后同步移除该记录（语义上它
+      // 已不再是被父级接管的 own）。
+      ownMap[id] = unmarkInherited(ext) as T;
+      originallyOwn.delete(id);
+      continue;
+    }
 
     if (visitedFromParent.has(id)) {
       // 父级仍有但被用户删除 → 自动 opt-out
       newOptedOut.push(id);
     } else if (originallyOwn.has(id)) {
       // 父级不再提供, 但原本是 own → 退还为 own
-      const { metadata, ...rest } = ext;
-      const { [INHERITED_PROFILE_META_KEY]: _, ...restMeta } = metadata ?? {};
-      ownMap[id] = { ...rest, metadata: Object.keys(restMeta).length > 0 ? restMeta : undefined } as T;
+      ownMap[id] = unmarkInherited(ext) as T;
       originallyOwn.delete(id);
     }
     // 父级不再提供, 也不是 originallyOwn → 丢弃
@@ -1158,4 +1174,20 @@ export function getLastMeaningfulCharacterIndex(text: string): number {
   }
 
   return lastMeaningfulIndex;
+}
+
+/**
+ * Strips the inheritProfile inheritance marker from an extension entry,
+ * reverting it to an "own" extension. Preserves all other metadata.
+ *
+ * @param ext The extension entry previously marked as inherited.
+ * @returns The extension with inheritance metadata removed.
+ */
+function unmarkInherited<T extends ExtensionEntry>(ext: T): T {
+  const { metadata, ...rest } = ext;
+  const { [INHERITED_PROFILE_META_KEY]: _, ...restMeta } = metadata ?? {};
+  return {
+    ...rest,
+    metadata: Object.keys(restMeta).length > 0 ? restMeta : undefined,
+  } as T;
 }

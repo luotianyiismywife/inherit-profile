@@ -97,15 +97,19 @@ suite("mergeInheritedExtensions full reconciliation", () => {
     assert.strictEqual(r.merged[0].metadata?.inheritProfile, undefined);
   });
 
-  test("inherited extensions are removed when no parents", () => {
-    // 'b' was inherited; since no parent provides it and it's not in originallyOwn → discarded
+  test("inherited extensions are preserved as own when no parents (issue #5)", () => {
+    // 无父级（根 Profile）时绝不清理 inherited 扩展（防止 VS Code 降级清空根 Profile）。
+    // 'b' 虽带 inherited 标记且不在 originallyOwn，也应退还为 own 保留而非丢弃。
     const input: any = [
       { identifier: { id: "a" } },
       { identifier: { id: "b" }, metadata: { inheritProfile: { inherited: true } } },
     ];
     const r = mergeInheritedExtensions(input, [], ["a"]);
-    assert.strictEqual(r.merged.length, 1, "b should be discarded");
-    assert.strictEqual(r.merged[0].identifier?.id, "a");
+    assert.strictEqual(r.merged.length, 2, "b should be preserved as own, not discarded");
+    const b = r.merged.find(e => e.identifier?.id === "b")!;
+    assert.strictEqual(b.metadata?.inheritProfile, undefined, "b should be reverted to own (marker removed)");
+    const a = r.merged.find(e => e.identifier?.id === "a")!;
+    assert.strictEqual(a.metadata?.inheritProfile, undefined, "a stays own");
   });
 
   test("parent provides new extensions as inherited", () => {

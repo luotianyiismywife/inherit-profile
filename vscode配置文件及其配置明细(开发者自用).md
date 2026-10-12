@@ -4,25 +4,25 @@ description: "Use when: 需要了解用户本机 VS Code Profile 体系（Base/B
 
 # VS Code Profile 体系 · 完整架构文档
 
-> 最后更新: 2026-08-10
+> 最后更新: 2026-10-12
 
 ---
 
 ## 一、整体架构
 
 ```
-Base（通用底座·19个）
-├── Base->Dev（通用开发工具·63个 含继承自 Base）
-└── Base->Writing（文字写作·19个，纯继承 Base，无 own 扩展）
-
-Test（未归类文档工具，3个，仅文档规划）
+Base（通用底座·15个）
+├── Base->Dev（通用开发工具·68个 含继承自 Base）
+└── Base->Writing（文字写作·15个，纯继承 Base，无 own 扩展）
 ```
+
+> ⚠️ **2026-10-12 恢复记录**：VS Code 降级（1.141→1.140）曾导致 Base 扩展被清空（详见 [issue #5](https://github.com/luotianyiismywife/inherit-profile/issues/5)）。已从 Settings Sync 快照恢复 Base 的 15 个扩展，Dev/Writing 的继承关系已自动重建。
 
 ---
 
 ## 二、Profile 明细
 
-### 2.1 Base · 通用底座（19 个扩展）
+### 2.1 Base · 通用底座（15 个扩展）
 
 **UUID:** `10a9f58d`
 
@@ -35,35 +35,29 @@ Test（未归类文档工具，3个，仅文档规划）
     "inheritProfile.runOnStartup": true,
     "inheritProfile.runOnProfileChange": true,
     "git.autofetch": true,
-    "gitlens.ai.model": "vscode",
-    "gitlens.ai.vscode.model": "opencode-go:minimax",
     "diffEditor.renderSideBySide": false,
-    "chat.tools.urls.autoApprove": {
-        "https://code.visualstudio.com": true,
-        "https://github.com/microsoft/vscode/wiki/*": true,
-        "https://github.com": {
-            "approveRequest": false,
-            "approveResponse": true
-        },
-        "https://opencode.ai": true
-    },
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
     "chat.agent.maxRequests": 300,
     "opencodego.enableZenFreeModels": true,
     "explorer.confirmDelete": false,
-    "chat.utilitySmallModel": "opencodego/deepseek-v4-flash",
+    "chat.utilitySmallModel": "senseaudio/qwen3.8-27b",
     "chat.viewSessions.orientation": "stacked",
     "chat.mcp.gallery.enabled": true,
-    "terminal.integrated.commandsToSkipShell": [
-        "kilo-code.new.agentManagerOpen",
-        "kilo-code.new.agentManager.showTerminal"
-    ],
     "opencodego.commitIncludeCommitDiff": true,
     "opencodego.temperature": 0,
-    "opencodego.top_p": 0
+    "opencodego.top_p": 0,
+    "tokenrhythm.temperature": 1,
+    "tokenrhythm.top_p": 0.5,
+    "tokenrhythm.maxInputTokensRatio": 0.8,
+    "tokenrhythm.syncModelsOnStartup": false,
+    "editor.accessibilitySupport": "off",
+    "inheritProfile._originallyOwnExtensions": [],
+    "inheritProfile.optedOutExtensions": []
 }
 ```
 
 > ⚠️ 注意：Base 是根 Profile，`inheritProfile.runOnProfileChange` 不会产生实际影响（无父 Profile 可继承）
+> ⚠️ 根 Profile 的 `_originallyOwnExtensions` 应为空数组——Base 的所有扩展都是 own，不存在"被父级接管"的情况
 
 **扩展列表:**
 
@@ -74,30 +68,26 @@ Test（未归类文档工具，3个，仅文档规划）
 | `github.vscode-pull-request-github`       | GitHub Pull Requests | PR 管理               |
 | `ms-ceintl.vscode-language-pack-zh-hans`  | Chinese (Simplified) | 中文汉化              |
 | `vscode-icons-team.vscode-icons`          | vscode-icons         | 文件图标主题          |
-| `vizards.deepseek-v4-for-copilot`         | DeepSeek V4          | Copilot 模型          |
-| `denizhandaklr.glm-chat-provider`         | GLM Chat             | Copilot 模型          |
-| `denizhandaklr.kimi-lm-provider`          | Kimi                 | Copilot 模型          |
-| `denizhandaklr.minimax-vscode`            | MiniMax              | Copilot 模型          |
 | `kisstkondoros.vscode-gutter-preview`     | Image preview        | 图片预览              |
-| `luotianyiismywife.ghcp-dashboard`        | GHCP Dashboard       | GitHub Copilot 仪表盘 |
 | `luotianyiismywife.inherit-profile-plus`  | Inherit Profile Plus | 继承工具              |
-| `onesoftqwq.opencode-go-copilot-provider` | OpenCode Go          | Copilot 适配          |
+| `luotianyiismywife.amd-tokenfactory-copilot` | AMD TokenFactory  | Copilot 模型          |
+| `luotianyiismywife.senseaudio-copilot-provider` | SenseAudio Provider | Copilot 模型       |
+| `luotianyiismywife.tokenrhythm-copilot-provider` | TokenRhythm Provider | Copilot 模型      |
 | `yzhang.markdown-all-in-one`              | Markdown All in One  | Markdown 增强         |
 | `mushan.vscode-paste-image`               | Paste Image          | 粘贴图片              |
 | `davidanson.vscode-markdownlint`          | markdownlint         | Markdown 规范检查     |
 | `shd101wyy.markdown-preview-enhanced`     | Markdown Preview Enhanced | Markdown 增强预览 |
-| `luotianyiismywife.tokenrhythm-copilot-provider` | TokenRhythm Provider | Copilot 模型 |
 | `ms-vscode.vscode-chat-customizations-evaluations` | Chat Customizations Evaluations | Copilot 评估 |
 
 ---
 
-### 2.2 Base->Dev · 通用开发（63 个扩展，含继承自 Base）
+### 2.2 Base->Dev · 通用开发（68 个扩展，含继承自 Base）
 
 **UUID:** `-367578e4`
 
 **继承:** `inheritProfile.parents: ["Base"]`
 
-**扩展构成:** own 45 个（下表）+ 继承 Base 19 个 − 重复的 inherit-profile-plus 1 个 = **63 个**
+**扩展构成:** own 53 个（下表）+ 继承 Base 15 个 = **68 个**
 
 **Settings:**
 
@@ -109,15 +99,13 @@ Test（未归类文档工具，3个，仅文档规划）
     "inheritProfile.showMessages": false,
     "editor.defaultFormatter": "esbenp.prettier-vscode",
     "editor.formatOnSave": true,
-    "gitlens.ai.model": "vscode",
-    "gitlens.ai.vscode.model": "copilotcli:",
     "git.autofetch": true
 }
 ```
 
 > ⚠️ 子 Profile 中还包含继承自 Base 的 inherited settings 块（由 `inherit-profile-plus` 自动管理），此处不重复列出
 
-**扩展列表:**
+**扩展列表（own 53 个）:**
 
 | 扩展 ID                                  | 名称                       | 用途              |
 | ---------------------------------------- | -------------------------- | ----------------- |
@@ -130,7 +118,6 @@ Test（未归类文档工具，3个，仅文档规划）
 | `gerrnperl.outline-map`                  | Outline Map                | 代码大纲图        |
 | `vadimcn.vscode-lldb`                    | CodeLLDB                   | 调试器            |
 | `redhat.vscode-xml`                      | XML                        | XML 支持          |
-| `luotianyiismywife.inherit-profile-plus` | Inherit Profile Plus       | 继承工具          |
 | `ms-python.python`                       | Python                     | Python 语言支持   |
 | `ms-python.debugpy`                      | Python Debugger            | Python 调试器     |
 | `ms-python.vscode-pylance`               | Pylance                    | Python 语言服务   |
@@ -166,8 +153,17 @@ Test（未归类文档工具，3个，仅文档规划）
 | `ms-vscode.vscode-github-issue-notebooks` | GitHub Issue Notebooks    | GitHub Issue 笔记 |
 | `ms-vscode-remote.remote-containers`     | Remote - Containers        | 容器远程开发      |
 | `typescriptteam.native-preview`          | TypeScript 7               | TypeScript 原生预览 |
+| `ms-vscode.cpptools`                     | C/C++                      | C/C++ 语言支持    |
+| `ms-vscode.cpptools-extension-pack`      | C/C++ Extension Pack       | C/C++ 扩展包      |
+| `ms-vscode.cpptools-themes`              | C/C++ Themes               | C/C++ 主题        |
+| `ms-vscode.cpp-devtools`                 | C++ DevTools               | C++ 开发工具      |
+| `ms-vscode.cmake-tools`                  | CMake Tools                | CMake 支持        |
+| `ms-dotnettools.csharp`                  | C#                         | C# 语言支持       |
+| `ms-dotnettools.csdevkit`                | C# Dev Kit                 | C# 开发套件       |
+| `vue.volar`                              | Vue (Official)             | Vue 语言支持      |
+| `github.vscode-github-actions`           | GitHub Actions             | Actions 支持      |
 
-### 2.4 Base->Writing · 文字写作（19 个扩展 · 纯继承 Base）
+### 2.4 Base->Writing · 文字写作（15 个扩展 · 纯继承 Base）
 
 **UUID:** `-332dce57`
 
@@ -191,13 +187,13 @@ Test（未归类文档工具，3个，仅文档规划）
 
 **扩展列表:**
 
-与 **Base** 完全一致（19 个），由 `inherit-profile-plus` 在启动/切 Profile 时自动同步。**无需手动维护，`extensions.json` 保持空数组。**
+与 **Base** 完全一致（15 个），由 `inherit-profile-plus` 在启动/切 Profile 时自动同步。**无需手动维护，`extensions.json` 保持空数组。**
 
 ---
 
 ---
 
-### 2.5 Default Profile（57 个扩展 · 全局存储）
+### 2.5 Default Profile（59 个扩展 · 全局存储）
 
 **UUID:** `__default__profile__`（特殊，无独立目录）
 
@@ -226,7 +222,7 @@ Test（未归类文档工具，3个，仅文档规划）
 }
 ```
 
-**扩展列表（57 个）** — 全局安装，所有 Profile 可见，但各 Profile 的 `extensions.json` 决定哪些启用。
+**扩展列表（59 个）** — 全局安装，所有 Profile 可见，但各 Profile 的 `extensions.json` 决定哪些启用。
 
 | 类别          | 扩展                                                                                                                                                                                                                                 |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -247,7 +243,7 @@ Test（未归类文档工具，3个，仅文档规划）
 | ⚙️ 其他       | `ms-dotnettools.vscode-dotnet-runtime`                                                                                                                                                                                               |
 | 🖥️ PowerShell | `ms-vscode.powershell`                                                                                                                                                                                                              |
 | 🦀 Rust       | `rust-lang.rust-analyzer`                                                                                                                                                                                                           |
-| 🤖 Copilot 模型 | `vizards.deepseek-v4-for-copilot`, `denizhandaklr.glm-chat-provider`, `denizhandaklr.kimi-lm-provider`, `denizhandaklr.minimax-vscode`, `denizhandaklr.opencode-go-for-copilot`                                                    |
+| 🤖 Copilot 模型 | `vizards.deepseek-v4-for-copilot`, `denizhandaklr.glm-chat-provider`, `denizhandaklr.kimi-lm-provider`, `denizhandaklr.minimax-vscode`, `denizhandaklr.opencode-go-for-copilot`, `luotianyiismywife.tokenrhythm-copilot-provider` |
 
 ---
 
@@ -269,9 +265,9 @@ Test（未归类文档工具，3个，仅文档规划）
 
 ```mermaid
 graph TB
-    Base["Base (19个)"]
-    Dev["Base->Dev (63个)<br/>own 45个: prettier, errorlens, dependi<br/>+Python, Go, Java, 前端, ESLint, npm<br/>+lldb, xml, shell, debug<br/>+PowerShell, Rust, .NET, GitLab<br/>+Dev Containers, Extension Test Runner,<br/>+GitHub Issue Notebooks, TypeScript 7"]
-    Writing["Base->Writing (19个)<br/>纯继承 Base，无 own 扩展"]
+    Base["Base (15个)"]
+    Dev["Base->Dev (68个)<br/>own 53个: prettier, errorlens, dependi<br/>+Python, Go, Java, 前端, ESLint, npm<br/>+lldb, xml, shell, debug<br/>+PowerShell, Rust, .NET, GitLab<br/>+C/C++, C#, Vue, GitHub Actions<br/>+Dev Containers, Extension Test Runner,<br/>+GitHub Issue Notebooks, TypeScript 7"]
+    Writing["Base->Writing (15个)<br/>纯继承 Base，无 own 扩展"]
 
     Base -->|inherit| Dev
     Base -->|inherit| Writing
@@ -299,6 +295,9 @@ graph TB
 2. **扩展文件在全局**（`extensions/`），Profile 的 `extensions.json` 只是"引用清单"
 3. **`inherit-profile-plus` 扩展** 需要在子 Profile 中也安装才能工作
 4. **Profile 名称中的 `->`** 只是命名约定，无实际语义
+5. ⚠️ **VS Code 降级风险（2026-10-12 实测）**：从高版本降级到低版本（如 1.141→1.140）时，VS Code 会用旧版逻辑重写 Profile 的 `extensions.json`，可能打乱继承元数据，导致**根 Profile（Base）扩展被清空**。详见 [issue #5](https://github.com/luotianyiismywife/inherit-profile/issues/5)。**降级前务必备份 `%APPDATA%\Code\User\profiles\` 整个目录**。
+6. ⚠️ **多设备 Settings Sync 传播风险**：一台设备损坏后，损坏状态可能经 Settings Sync 传播到云端，再覆盖其他完好设备。恢复前建议先暂停各设备的 Settings Sync。
+7. 💾 **恢复数据源**：Settings Sync 历史快照位于 `%APPDATA%\Code\User\sync\<profileUUID>\extensions\`，可作为扩展清单的恢复依据。
 
 ---
 
