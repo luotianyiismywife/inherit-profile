@@ -979,6 +979,100 @@ async function getInheritedSettings(
  * NOTE: Removes ALL inherited blocks, not just the first one — see
  * {@link stripInheritedSettingsBlocks} for why that matters.
  */
+
+/**
+ * 检查原始 settings 文本中是否包含继承标记块（START 或 END marker）。
+ * 用于 issue #4 的"inheritedSettings 为空但文件里有僵尸块需清理"判定——
+ * 此时应清理僵尸块让文件自愈，而非连清理一起跳过。
+ */
+function hasInheritedMarkers(raw: string): boolean {
+  return (
+    raw.includes(INHERITED_SETTINGS_START_MARKER) ||
+    raw.includes(INHERITED_SETTINGS_END_MARKER)
+  );
+}
+
+/**
+ * 截断到第一个顶层闭合 `}`，丢弃其后的全部残留内容。
+ *
+ * 用于自愈"双顶层闭合"的深度损坏文件（2026-10-13 实测 Writing profile 形态）：
+ * 历史 bug 把两个 settings 对象拼接在一起，第二个对象丢了开头的 `{`，形成
+ * `{ ... } \n {残留对象体...} }`。清理 marker 块后 `isSettingsDocument` 仍因
+ * 第二个顶层 `}` 校验失败，`removeInheritedSettingsFromFile` 拒绝写入而无法
+ * 自愈。本函数用字符状态机（跳过字符串/注释，避免 `{}` 误判）定位第一个顶层
+ * 闭合 `}`，只保留到该处，丢弃后面的冗余残留对象。
+ *
+ * ⚠️ 仅在文件本身畸形（isSettingsDocument 失败）且确有继承标记被清理时才调用，
+ * 避免误删用户的有效内容。
+ *
+ * @param raw Raw settings 文本。
+ * @returns 截断到第一个顶层闭合后的内容；若没有顶层 `{`，原样返回。
+ */
+function truncateAtFirstTopLevelClose(raw: string): string {
+  let depth = 0;
+  let inString = false;
+  let stringChar = "";
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i];
+    const nextChar = raw[i + 1];
+
+    if (inLineComment) {
+      if (char === "\n") inLineComment = false;
+      continue;
+    }
+    if (inBlockComment) {
+      if (char === "*" && nextChar === "/") {
+        inBlockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (inString) {
+      if (char === "\\") {
+        i++;
+        continue;
+      }
+      if (char === stringChar) inString = false;
+      continue;
+    }
+    if (char === "/" && nextChar === "/") {
+      inLineComment = true;
+      i++;
+      continue;
+    }
+    if (char === "/" && nextChar === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      inString = true;
+      stringChar = char;
+      continue;
+    }
+    if (char === "{") {
+      depth++;
+      continue;
+    }
+    if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        // 第一个顶层闭合：只保留到此处（含），丢弃其后残留。
+        return raw.slice(0, i + 1);
+      }
+      if (depth < 0) {
+        // 不平衡（闭合多于开启）——无法定位，原样返回。
+        return raw;
+      }
+    }
+  }
+  // 从未到达顶层闭合——原样返回。
+  return raw;
+}
+
 async function removeInheritedSettingsFromFile(
   settingsPath: string,
 ): Promise<void> {
@@ -1029,12 +1123,26 @@ async function removeInheritedSettingsFromFile(
   //（不能用通用 isBalancedJsonc，否则 `[` 顶层会漏过）。失败即跳过写入+告警，
   // 绝不静默覆盖用户文件（1.8.4 教训）。
   if (!isSettingsDocument(cleaned)) {
-    console.warn(
-      `[settings-consistency] Refusing to write cleaned settings to ` +
-        `\`${settingsPath}\`: result is not a balanced settings object. ` +
-        `Skipping write to avoid corrupting the file further.`,
-    );
-    return;
+    // issue #4 深度自愈：清理 marker 块后仍畸形，可能是"双顶层闭合"——
+    // 历史 bug 把两个 settings 对象拼接，第二个对象丢了开头的 `{`，
+    // 形成 `{...}\n{残留对象体...}}`。尝试截断到第一个顶层闭合丢弃残留，
+    // 再校验一次。仅当截断后成为合法 settings 对象才写回，否则仍跳过（1.8.4 防御）。
+    const truncated = truncateAtFirstTopLevelClose(cleaned);
+    if (truncated !== cleaned && isSettingsDocument(truncated)) {
+      console.warn(
+        `[settings-consistency] \`${settingsPath}\` had a residual object ` +
+          `after the first top-level close (double top-level brace); ` +
+          `truncated it to self-heal (issue #4).`,
+      );
+      cleaned = truncated;
+    } else {
+      console.warn(
+        `[settings-consistency] Refusing to write cleaned settings to ` +
+          `\`${settingsPath}\`: result is not a balanced settings object. ` +
+          `Skipping write to avoid corrupting the file further.`,
+      );
+      return;
+    }
   }
 
   console.info(
@@ -1165,14 +1273,26 @@ async function applyInheritedSettings(
   );
 
   // 防御：声明了父级却算不出任何继承设置（父级 settings.json 读取失败/损坏
-  // 等异常）→ 跳过删除，保留现有块，避免"只删不写"造成块永久丢失。
+  // 等异常）→ 不写回新块，避免"只删不写"造成块永久丢失。
+  // ⚠️ issue #4：即便继承设置为空，若文件里**实际存在**继承标记块（历史 bug
+  // 残留的僵尸块），仍应先清理让文件自愈，只是不写回新块。
   if (parentProfiles.length > 0 && totalInheritedSettings === 0) {
-    console.warn(
-      `[settings-consistency] Skipping inherited settings removal for ` +
-        `\`${currentProfileName}\`: parent profile(s) declared but no ` +
-        `inheritable settings resolved. Keeping existing block to avoid ` +
-        `data loss.`,
-    );
+    const raw = await readRawSettingsFile(currentProfilePath);
+    if (hasInheritedMarkers(raw)) {
+      console.warn(
+        `[settings-consistency] No inheritable settings for ` +
+          `\`${currentProfileName}\` but inherited marker block(s) present; ` +
+          `removing them to self-heal (issue #4). No new block written.`,
+      );
+      await removeInheritedSettingsFromFile(currentProfilePath);
+    } else {
+      console.warn(
+        `[settings-consistency] Skipping inherited settings removal for ` +
+          `\`${currentProfileName}\`: parent profile(s) declared but no ` +
+          `inheritable settings resolved and no marker block present. Keeping ` +
+          `file to avoid data loss.`,
+      );
+    }
     return;
   }
 
@@ -1677,15 +1797,29 @@ async function syncProfileByName(
   );
 
   // 防御：声明了父级却算不出任何继承设置（父级目录解析失败 / 父级
-  // settings.json 读取失败等异常）→ 跳过删除，保留现有块，避免
+  // settings.json 读取失败等异常）→ 不写回新块，避免
   // "先删后写、算空就丢块"造成 inherited 块永久丢失（2026-08-21 实测根因，
   // 与 applyInheritedSettings 同款防御）。
+  // ⚠️ issue #4：即便 inheritedSettings 为空，若文件里**实际存在**继承标记块
+  //（历史 bug 残留的僵尸块），仍应先执行 removeInheritedSettingsFromFile 清掉
+  // 它们让文件自愈——"清理僵尸块"与"删除有效继承块后不写回"是两件事，不应被
+  // 同一分支跳过。否则升级到修复版后，被 issue #3 污染的损坏文件永远无法自愈。
   if (parentNames.length > 0 && Object.keys(inheritedSettings).length === 0) {
-    console.warn(
-      `[settings-consistency] Skipping inherited settings removal for ` +
-        `\`${profileName}\`: parent profile(s) declared but no inheritable ` +
-        `settings resolved. Keeping existing block to avoid data loss.`,
-    );
+    if (hasInheritedMarkers(rawSettingsText)) {
+      console.warn(
+        `[settings-consistency] No inheritable settings for \`${profileName}\` ` +
+          `but inherited marker block(s) present; removing them to self-heal ` +
+          `(issue #4). No new block written.`,
+      );
+      await removeInheritedSettingsFromFile(settingsPath);
+    } else {
+      console.warn(
+        `[settings-consistency] Skipping inherited settings removal for ` +
+          `\`${profileName}\`: parent profile(s) declared but no inheritable ` +
+          `settings resolved and no marker block present. Keeping file to ` +
+          `avoid data loss.`,
+      );
+    }
   } else {
     await removeInheritedSettingsFromFile(settingsPath);
     if (Object.keys(inheritedSettings).length > 0) {

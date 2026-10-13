@@ -9,6 +9,7 @@ import {
   markExtensionAsOptedOut,
   convertOldMarkers,
   resolveParentExtensionsPaths,
+  compareVersions,
   ExtensionEntry,
   INHERITED_PROFILE_META_KEY,
 } from "../../profileSettings";
@@ -69,6 +70,64 @@ suite("mergeInheritedExtensions full reconciliation", () => {
     const newExt: any = { identifier: { id: "a.b" }, metadata: { inheritProfile: { inherited: true } } };
     const result = convertOldMarkers(newExt);
     assert.deepStrictEqual(result, newExt);
+  });
+
+  // ── compareVersions 版本比较（issue #6：1.8.5 回滚时被连带删除，现已恢复）──
+
+  test("compareVersions compares semver segments (higher wins)", () => {
+    assert.ok(compareVersions("1.13.0", "1.12.3") > 0, "1.13.0 > 1.12.3");
+    assert.ok(compareVersions("1.12.3", "1.13.0") < 0, "1.12.3 < 1.13.0");
+    assert.strictEqual(compareVersions("1.5.0", "1.5.0"), 0);
+  });
+
+  test("compareVersions tolerates a leading v prefix and undefined", () => {
+    assert.strictEqual(compareVersions("v1.2.3", "1.2.3"), 0);
+    assert.ok(compareVersions("1.10.0", "1.9.0") > 0, "1.10.0 > 1.9.0 (not lexicographic)");
+    // undefined / 空串按 0 处理
+    assert.ok(compareVersions(undefined, "0.1.0") < 0, "undefined < 0.1.0");
+    assert.strictEqual(compareVersions(undefined, undefined), 0);
+  });
+
+  // ── 子 Profile 升级继承扩展不被父级回退（issue #6 回归）──
+
+  test("inherited extension upgraded in child is preserved when version >= parent (issue #6)", () => {
+    // 子级手动升级到更高版本（VSIX / 直接升级），reconcile 后应保留子级版本而非被父级覆盖回退。
+    const child: any = [
+      { identifier: { id: "ext.a" }, version: "1.13.0", metadata: { inheritProfile: { inherited: true } } },
+    ];
+    const parent: any = { profileName: "Base", extensions: [{ identifier: { id: "ext.a" }, version: "1.12.3" }] };
+    const r = mergeInheritedExtensions<any>(child, [parent], []);
+    const merged = r.merged.find(e => e.identifier?.id === "ext.a")!;
+    assert.strictEqual(merged.version, "1.13.0", "child's higher version must be preserved");
+    assert.strictEqual(merged.metadata?.inheritProfile?.inherited, true);
+  });
+
+  test("parent higher version still syncs down to child (issue #6)", () => {
+    const child: any = [
+      { identifier: { id: "ext.b" }, version: "1.0.0", metadata: { inheritProfile: { inherited: true } } },
+    ];
+    const parent: any = { profileName: "Base", extensions: [{ identifier: { id: "ext.b" }, version: "2.0.0" }] };
+    const r = mergeInheritedExtensions<any>(child, [parent], []);
+    const merged = r.merged.find(e => e.identifier?.id === "ext.b")!;
+    assert.strictEqual(merged.version, "2.0.0", "parent higher version should win");
+  });
+
+  test("equal version preserves child entry (issue #6)", () => {
+    const child: any = [
+      { identifier: { id: "ext.c" }, version: "1.5.0", metadata: { inheritProfile: { inherited: true } } },
+    ];
+    const parent: any = { profileName: "Base", extensions: [{ identifier: { id: "ext.c" }, version: "1.5.0" }] };
+    const r = mergeInheritedExtensions<any>(child, [parent], []);
+    const merged = r.merged.find(e => e.identifier?.id === "ext.c")!;
+    assert.strictEqual(merged.version, "1.5.0");
+  });
+
+  test("own extension taken over by parent keeps child version (issue #6)", () => {
+    const child: any = [{ identifier: { id: "ext.d" }, version: "3.0.0" }]; // own
+    const parent: any = { profileName: "Base", extensions: [{ identifier: { id: "ext.d" }, version: "1.0.0" }] };
+    const r = mergeInheritedExtensions<any>(child, [parent], []);
+    const merged = r.merged.find(e => e.identifier?.id === "ext.d")!;
+    assert.strictEqual(merged.version, "3.0.0", "own branch preserves child version");
   });
 
   test("resolveParentExtensionsPaths returns correct paths", () => {

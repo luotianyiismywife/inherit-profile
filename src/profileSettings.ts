@@ -420,6 +420,35 @@ export function stripInheritedExtensions<T extends ExtensionEntry>(
 }
 
 /**
+ * 比较 semver 版本号（容忍前导 `v`）：a > b 返回正数，a === b 返回 0，a < b 返回负数。
+ * 空值按 0 处理（`undefined` / 空串等同 "0"）。
+ *
+ * @param a 版本号 A。
+ * @param b 版本号 B。
+ * @returns 正数（a>b）、0（相等）或负数（a<b）。
+ */
+export function compareVersions(
+  a: string | undefined,
+  b: string | undefined,
+): number {
+  const pa = (a ?? "")
+    .replace(/^v/i, "")
+    .split(".")
+    .map((n) => parseInt(n, 10) || 0);
+  const pb = (b ?? "")
+    .replace(/^v/i, "")
+    .split(".")
+    .map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] ?? 0;
+    const nb = pb[i] ?? 0;
+    if (na !== nb) return na - nb;
+  }
+  return 0;
+}
+
+/**
  * Full-reconciliation merge of parent extensions into the current profile.
  *
  * Instead of incrementally adding missing extensions, this function performs
@@ -486,9 +515,18 @@ export function mergeInheritedExtensions<T extends ExtensionEntry>(
           originallyOwn.add(id);
         }
       } else if (!inheritedMap[id]) {
-        inheritedMap[id] = markExtensionAsInherited(
-          parentExt as unknown as T
-        );
+        // 子级已 inherited 且版本 >= 父级 → 保留子级（子级可能是手动更新的更高版本，
+        // 如 VSIX 安装 / 在子 Profile 直接升级）。仅当父级版本更高时才用父级覆盖。
+        // ⚠️ issue #6：compareVersions 在 1.8.5（cd26325）整体回滚时被连带删除，
+        // 此分支曾退化为"无条件用父级覆盖"，导致子 Profile 升级继承扩展后被回退。
+        const prev = inheritedFromPrev[id];
+        if (prev && compareVersions(prev.version, parentExt.version) >= 0) {
+          inheritedMap[id] = prev;
+        } else {
+          inheritedMap[id] = markExtensionAsInherited(
+            parentExt as unknown as T
+          );
+        }
       }
     }
   }

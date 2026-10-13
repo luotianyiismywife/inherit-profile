@@ -31,6 +31,9 @@ coverage/
 # Packaged extensions:
 *.vsix
 
+# 本地诊断/验证脚本（含本机 profile 绝对路径等敏感信息，不入库）:
+scripts/
+
 
 # TokenRhythm ��չ����ʱ��־���Զ����ɣ����ύ��
 .copilot/model-sync-log.md
