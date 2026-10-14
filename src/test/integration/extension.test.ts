@@ -13,6 +13,7 @@ import {
 import {
   removeCurrentProfileInheritedSettings,
   updateCurrentProfileInheritance,
+  writeManagedFile,
 } from "../../profiles";
 import {
   registerCurrentProfileSaveWatcher,
@@ -651,6 +652,144 @@ suite("Extension integration", () => {
       await new Promise((resolve) => setTimeout(resolve, 750));
       const contentAfterWaiting = await fs.readFile(settingsPath, "utf8");
       assert.strictEqual(contentAfterWaiting, contentAfterOwnWrite);
+    } finally {
+      for (const subscription of context.subscriptions) {
+        subscription.dispose();
+      }
+    }
+  });
+
+  test("writeManagedFile writes atomically and leaves no temp files behind", async () => {
+    const currentProfile: ProfileDescriptor = {
+      name: "Child",
+      location: "child-profile",
+    };
+
+    await writeStorage(sandboxRoot, currentProfile);
+    await writeProfileSettings(
+      sandboxRoot,
+      currentProfile,
+      `{
+    "editor.tabSize": 2
+}
+`,
+    );
+
+    const settingsPath = path.join(
+      getProfileDirectory(sandboxRoot, currentProfile),
+      "settings.json",
+    );
+    const profileDir = path.dirname(settingsPath);
+
+    await writeManagedFile(
+      settingsPath,
+      `{
+    "editor.tabSize": 4
+}
+`,
+    );
+
+    assert.strictEqual(
+      await fs.readFile(settingsPath, "utf8"),
+      `{
+    "editor.tabSize": 4
+}
+`,
+    );
+
+    // 原子写用同目录临时文件 + rename，成功后临时文件必须已被清理。
+    const leftovers = (await fs.readdir(profileDir)).filter((name) =>
+      name.endsWith(".tmp"),
+    );
+    assert.deepStrictEqual(
+      leftovers,
+      [],
+      `atomic write must not leave temp files behind, found: ${leftovers.join(", ")}`,
+    );
+  });
+
+  test("atomic write does not loop the current-profile watcher and leaves no temp files", async function () {
+    this.timeout(20000);
+
+    const currentProfile: ProfileDescriptor = {
+      name: "Child",
+      location: "child-profile",
+    };
+    const parentProfile: ProfileDescriptor = {
+      name: "Parent",
+      location: "parent-profile",
+    };
+
+    await writeStorage(sandboxRoot, currentProfile, [parentProfile]);
+    await writeProfileSettings(
+      sandboxRoot,
+      currentProfile,
+      `{
+    "editor.tabSize": 2
+}
+`,
+    );
+    await writeProfileSettings(
+      sandboxRoot,
+      parentProfile,
+      `{
+    "files.autoSave": "off"
+}
+`,
+    );
+
+    await updateConfig("parents", ["Parent"]);
+    const context = createContext(sandboxRoot);
+
+    try {
+      await registerCurrentProfileSaveWatcher(context);
+
+      // Watcher registration involves an async round-trip to set up the
+      // underlying OS-level watch, so give it a moment to settle.
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      const settingsPath = path.join(
+        getProfileDirectory(sandboxRoot, currentProfile),
+        "settings.json",
+      );
+      const profileDir = path.dirname(settingsPath);
+
+      // Trigger inheritance once; the extension performs an atomic write
+      // (temp file + rename) to apply the inherited setting.
+      await updateCurrentProfileInheritance(context);
+      const settled = await waitForSettings(
+        settingsPath,
+        (settings) => settings["files.autoSave"] === "off",
+        15000,
+      );
+      assert.strictEqual(settled["files.autoSave"], "off");
+
+      // The atomic write must not leave its temp file behind — otherwise the
+      // watcher (or a future reconcile) could pick up stray files.
+      const leftovers = (await fs.readdir(profileDir)).filter((name) =>
+        name.endsWith(".tmp"),
+      );
+      assert.deepStrictEqual(
+        leftovers,
+        [],
+        `atomic write must not leave temp files behind, found: ${leftovers.join(", ")}`,
+      );
+
+      // The rename-over that completes the atomic write must be recognised as
+      // this extension's own write. If it were mistaken for an external edit,
+      // the watcher would schedule another reconcile; the file would still
+      // settle on the same content, so assert byte-for-byte stability after
+      // waiting comfortably longer than the debounce delay, and that no temp
+      // files appear as a side effect of any spurious re-write.
+      const contentAfterOwnWrite = await fs.readFile(settingsPath, "utf8");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const contentAfterWaiting = await fs.readFile(settingsPath, "utf8");
+      assert.strictEqual(contentAfterWaiting, contentAfterOwnWrite);
+
+      const leftoversAfter = (await fs.readdir(profileDir)).filter((name) =>
+        name.endsWith(".tmp"),
+      );
+      assert.deepStrictEqual(leftoversAfter, []);
     } finally {
       for (const subscription of context.subscriptions) {
         subscription.dispose();

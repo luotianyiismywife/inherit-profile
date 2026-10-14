@@ -81,6 +81,7 @@ import * as fs from "fs/promises";
 import { statSync, readFileSync } from "fs";
 import { parse as parseJSONC } from "jsonc-parser";
 import { getDisabledExtensions } from "./disabledExtensions";
+import { writeFileAtomic } from "./atomicWrite";
 import {
   buildInheritedSettingsBlock,
   findTabValue,
@@ -127,7 +128,7 @@ const selfWriteTracker = new SelfWriteTracker();
  * `isManagedFileSelfWrite`) can recognise and ignore the change this write is
  * about to cause.
  *
- * 防抖/收敛（双保险）:
+ * 防抖/收敛（三重保险）:
  *   ① **写前内容比对**：写入前先读磁盘，若内容已与目标一致则**跳过写入**——
  *      不产生任何文件系统事件，从源头减少无谓触发。多窗口场景下，各实例
  *      计算出的最终内容一致时，第二个实例直接什么都不做。
@@ -135,6 +136,11 @@ const selfWriteTracker = new SelfWriteTracker();
  *      再写正文。其他实例（独立进程，内存中的 SelfWriteTracker 互相不可见）
  *      的 watcher 收到正文变更时读标记比对 sha1，命中即识别为兄弟实例自写，
  *      不再触发 reconcile——彻底切断跨窗口的互相触发循环。
+ *   ③ **原子写**：正文经 {@link writeFileAtomic}（同目录临时文件 + rename）
+ *      落盘。多窗口并发、且各实例算出的内容**不一致**时，非原子 `fs.writeFile`
+ *      会互相覆盖、把文件截断成未闭合中间态（issue #7）。rename 原子替换后，
+ *      磁盘上只会是完整旧文件或完整新文件，并发收敛为"最后一个 rename 胜出"。
+ *      rename 重试耗尽则**放弃本次写入**（保留旧内容），绝不回退非原子写。
  */
 async function writeManagedFile(
   filePath: string,
@@ -154,7 +160,18 @@ async function writeManagedFile(
   selfWriteTracker.record(filePath, content);
   // ③ 磁盘标记先落盘，再写正文（保证 watcher 触发时标记可读）
   writeWriteToken(filePath, content);
-  await fs.writeFile(filePath, content, "utf8");
+  // ④ 原子写：临时文件 + rename（占用时退避重试）。
+  //    失败即放弃本次写入（保留旧内容），交给下一次 reconcile 重试——
+  //    ⚠️ 绝不回退到 fs.writeFile，否则非原子写 bug 回归（issue #7）。
+  try {
+    await writeFileAtomic(filePath, content);
+  } catch (err) {
+    console.warn(
+      `[settings-consistency] Atomic write to \`${filePath}\` failed after ` +
+        `retries; leaving the previous content in place. ` +
+        `Error: ${(err as Error)?.message ?? err}`,
+    );
+  }
 }
 
 // writeManagedFile 需要 export, 供 extension.ts 的 checkAndRestoreMarkers 调用
