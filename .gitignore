@@ -32,5 +32,9 @@ coverage/
 *.vsix
 
 
+# Local-only files (issue backups, scratch, etc.) — never commit
+.local/
+
+
 # TokenRhythm ��չ����ʱ��־���Զ����ɣ����ύ��
 .copilot/model-sync-log.md
