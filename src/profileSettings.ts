@@ -129,7 +129,7 @@ export const WARNING_EXPLAIN =
  * such as `"README.md"` inside `files.exclude` into `files.exclude.README.md`,
  * which VS Code does not recognise as part of the original setting.
  *
- * @see https://github.com/alexjthomson/inherit-profile/issues/5
+ * @see https://github.com/luotianyiismywife/inherit-profile-plus/issues/5
  */
 export const NON_FLATTENABLE_SETTINGS: ReadonlySet<string> = new Set([
   "files.exclude",
@@ -535,7 +535,7 @@ export function mergeInheritedExtensions<T extends ExtensionEntry>(
   // ⚠️ 无父级场景（parentProfiles 为空，通常是根 Profile）: **绝不清理任何**
   //    inherited 扩展。根 Profile 的扩展天生应全是 own——对账时出现 inherited
   //    标记必然是异常（VS Code 降级 / Settings Sync 覆盖删除父级元数据导致
-  //    父级信息丢失，见 https://github.com/luotianyiismywife/inherit-profile/issues/5）。
+  //    父级信息丢失，见 https://github.com/luotianyiismywife/inherit-profile-plus/issues/5）。
   //    此时若按"父级不再提供"丢弃，扩展将
   //    永久丢失。因此统一**退还为 own 保留**，待父级恢复后由下次对账重新接管。
   //    即使父级全部读取失败被跳过（profile 目录解析失败等），退还为 own 也

@@ -2,8 +2,8 @@
 <h3 align="center">Enables profile inheritance in VisualStudio Code!</h3>
 <h4 align="center"><a href="https://marketplace.visualstudio.com/items?itemName=luotianyiismywife.inherit-profile-plus" target="_blank">View in Marketplace</a></h3>
 
-> **ℹ️ This is a community-maintained fork** with VS Code 1.127+ compatibility fixes.
-> [Original repo](https://github.com/alexjthomson/inherit-profile) by alexjthomson.
+> **ℹ️ Actively maintained** with VS Code 1.127+ compatibility fixes.
+> Originally based on [inherit-profile](https://github.com/alexjthomson/inherit-profile) by alexjthomson; this is now the primary, actively developed repository.
 >
 > **Extension ID:** `luotianyiismywife.inherit-profile-plus`
 >
@@ -111,7 +111,7 @@ First, the extension will read the settings for each of the profiles you have el
 > these objects are user-defined data (glob patterns, colour identifiers,
 > etc.) rather than nested setting names, so flattening them would corrupt
 > the setting. These are instead inherited or overridden as a single, whole
-> value (see [issue #5](https://github.com/alexjthomson/inherit-profile/issues/5)).
+> value (see [issue #5](https://github.com/luotianyiismywife/inherit-profile-plus/issues/5)).
 
 Let's say you have two profiles you want to inherit from:
 
@@ -246,7 +246,7 @@ As a result, the **Show Inheritance Tree** command can no longer display which p
 
 ### Focus on Extension Inheritance
 
-This fork focuses on **extension inheritance first** — settings inheritance is functional but secondary. The primary use case is maintaining consistent extensions across profile hierarchies (Base → Dev → Rust, etc.).
+This project focuses on **extension inheritance first** — settings inheritance is functional but secondary. The primary use case is maintaining consistent extensions across profile hierarchies (Base → Dev → Rust, etc.).
 
 ---
 

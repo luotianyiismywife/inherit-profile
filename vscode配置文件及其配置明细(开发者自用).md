@@ -16,7 +16,7 @@ Base（通用底座·15个）
 └── Base->Writing（文字写作·15个，纯继承 Base，无 own 扩展）
 ```
 
-> ⚠️ **2026-10-12 恢复记录**：VS Code 降级（1.141→1.140）曾导致 Base 扩展被清空（详见 [issue #5](https://github.com/luotianyiismywife/inherit-profile/issues/5)）。已从 Settings Sync 快照恢复 Base 的 15 个扩展，Dev/Writing 的继承关系已自动重建。
+> ⚠️ **2026-10-12 恢复记录**：VS Code 降级（1.141→1.140）曾导致 Base 扩展被清空（详见 [issue #5](https://github.com/luotianyiismywife/inherit-profile-plus/issues/5)）。已从 Settings Sync 快照恢复 Base 的 15 个扩展，Dev/Writing 的继承关系已自动重建。
 
 ---
 
@@ -295,7 +295,7 @@ graph TB
 2. **扩展文件在全局**（`extensions/`），Profile 的 `extensions.json` 只是"引用清单"
 3. **`inherit-profile-plus` 扩展** 需要在子 Profile 中也安装才能工作
 4. **Profile 名称中的 `->`** 只是命名约定，无实际语义
-5. ⚠️ **VS Code 降级风险（2026-10-12 实测）**：从高版本降级到低版本（如 1.141→1.140）时，VS Code 会用旧版逻辑重写 Profile 的 `extensions.json`，可能打乱继承元数据，导致**根 Profile（Base）扩展被清空**。详见 [issue #5](https://github.com/luotianyiismywife/inherit-profile/issues/5)。**降级前务必备份 `%APPDATA%\Code\User\profiles\` 整个目录**。
+5. ⚠️ **VS Code 降级风险（2026-10-12 实测）**：从高版本降级到低版本（如 1.141→1.140）时，VS Code 会用旧版逻辑重写 Profile 的 `extensions.json`，可能打乱继承元数据，导致**根 Profile（Base）扩展被清空**。详见 [issue #5](https://github.com/luotianyiismywife/inherit-profile-plus/issues/5)。**降级前务必备份 `%APPDATA%\Code\User\profiles\` 整个目录**。
 6. ⚠️ **多设备 Settings Sync 传播风险**：一台设备损坏后，损坏状态可能经 Settings Sync 传播到云端，再覆盖其他完好设备。恢复前建议先暂停各设备的 Settings Sync。
 7. 💾 **恢复数据源**：Settings Sync 历史快照位于 `%APPDATA%\Code\User\sync\<profileUUID>\extensions\`，可作为扩展清单的恢复依据。
 

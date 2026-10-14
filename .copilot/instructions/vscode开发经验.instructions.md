@@ -7,6 +7,8 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 > **用途**：记录 VS Code 开发环境的通用经验，包括**浏览器自动化操作**（市场上传、GitHub Release 等）、**MCP 配置与排障**、以及**文档同步更新约定**。本项目可能同时在多台机器上开发，本文档内容应保持**机器无关**，不要写入具体机器相关的路径/版本。
 > **更新原则**：现实环境变化（VS Code 升级、市场审核流程变化、MCP 服务器新增/删除、Profile 结构变化等）后，必须同步修改本文档。
 
+> **📌 项目身份（2026-10-14 起）**：本仓库**不再是 fork**，已从 `luotianyiismywife/inherit-profile` 改名为 **`luotianyiismywife/inherit-profile-plus`**（与扩展 ID 一致），是**主仓库**。上游 `alexjthomson/inherit-profile` 已长期停更，本地 `upstream` remote 已移除。所有仓库 URL（package.json / README / 源码注释 / 文档）统一指向新仓库名。
+
 ---
 
 ## 一、浏览器自动化操作经验（Copilot 内置浏览器工具）
@@ -21,16 +23,20 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 | **登录态不跨页面共享** | 每次 `open_browser_page` 新开的浏览器页**不保留**之前的登录 cookie。切换页面（如市场→GitHub）需要重新登录 |
 | **元素点击超时** | 微软/谷歌系页面（marketplace、reCAPTCHA）的按钮常因动画/iframe 导致 `click_element` 超时。**解决方案**：用 `run_playwright_code` + `page.evaluate(() => btn.click())` 强制触发 JS 点击 |
 | **iframe 内元素** | reCAPTCHA 验证框、部分对话框在 iframe 内，快照里可见但需用户手动交互（如"选择包含小轿车的图片"） |
-| **文件上传** | 优先用 `page.setInputFiles('input[type=file]', '绝对路径')` 直接设文件（如市场上传 VSIX）。GitHub Release 附件用 `waitForEvent('filechooser')` + `chooser.setFiles()` |
+| **文件上传** | 用 `page.setInputFiles('<input选择器>', '绝对路径')` 直接设文件。**隐藏的 `input[type=file]` 也能注入**（Playwright 可操作 hidden input）——市场用 `#file-upload`，GitHub Release 用 `#releases-upload`。注入后按钮从 disabled 变 enabled |
 | **上传后状态** | 市场上传后显示 `Verifying <版本>`，需等待审核（通常数小时）；reCAPTCHA 验证通过后上传自动继续 |
 
 ### 1.2 VS Code 市场（Marketplace）上传流程
 
+> ⚠️ **升级已有扩展 ≠ 发新扩展**！升级走**扩展行的 More Actions → Update**；顶部菜单的 **More commands → New extension → Visual Studio Code** 是**发布全新扩展**，对已存在的扩展用它会报错/走错流程。
+
 1. 打开 `https://marketplace.visualstudio.com/manage/publishers/<publisherId>` → 用户登录 Microsoft 账号
-2. 在扩展列表行点 **More Actions...**（`button[aria-label="More Actions..."]`）→ **Update**
-3. 上传对话框出现：`page.setInputFiles('#file-upload', 'xxx.vsix')`
-4. 点击 **Upload** → 出现 reCAPTCHA 验证（**需用户手动完成**）→ 验证后自动上传
-5. 列表显示 `Verifying <新版本>` → 等待审核通过
+2. **悬停目标扩展所在行**（More Actions 按钮默认隐藏，悬停才出现）→ 点行内 **More Actions...** → 菜单选 **Update**
+3. 上传对话框出现：`page.setInputFiles('#file-upload', 'xxx.vsix')`（`#file-upload` 是 hidden input，可直接注入）
+4. 点击 **Upload** → 列表行变为 `<旧版本> Verifying <新版本> ... just now`
+5. 等待验证通过转 Public（通常几分钟到数小时）
+
+> **实测（2026-10-14 v1.9.4）**：Update 流程中 reCAPTCHA 显示"已超出免费配额"但**不阻塞上传**（Update 可能不强制验证码）；`setInputFiles` 注入 hidden input 成功，Upload 按钮随即启用。
 
 > ⚠️ **关键教训**：vsix 打包必须**包含 dependencies**！用 `npx vsce package`（**不要加 `--no-dependencies`**），否则插件装不上 node_modules，用户激活直接崩溃（报"命令未找到"）。打包后务必 `npx vsce ls` 确认 `node_modules/` 在包内。
 
@@ -41,17 +47,15 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 
 ### 1.3 GitHub Release 创建流程
 
-1. 打开 `https://github.com/<owner>/<repo>/releases/new?tag=vX.Y.Z&title=vX.Y.Z` → 用户登录 GitHub
-2. 填好 tag / 标题 / 描述（URL 参数可预填）
+1. 打开 `https://github.com/<owner>/<repo>/releases/new?tag=vX.Y.Z` → 用户登录 GitHub（tag 已存在时显示 "Existing tag"）
+2. 填好标题 / 描述（URL 参数可预填 tag）
 3. 二进制附件上传（vsix 等）：
    ```js
-   const chooserPromise = page.waitForEvent('filechooser', { timeout: 5000 });
-   // 点击 "Attach binaries by dropping them here or selecting them" 按钮
-   const chooser = await chooserPromise;
-   await chooser.setFiles('绝对路径\\xxx.vsix');
+   await page.setInputFiles('#releases-upload', '绝对路径\\xxx.vsix');
    ```
+   > **实测（2026-10-14 v1.9.4）**：`#releases-upload` 是**可见**的 file input，`setInputFiles` 直接注入即可，无需 `waitForEvent('filechooser')`。注入后附件区显示文件名 + 大小。
    > ⚠️ **注意**：vsix 不能拖进正文编辑器（GitHub 不支持该类型作为正文附件），必须走**二进制附件区**。
-4. 点击 **Publish release**
+4. 点击 **Publish release** → URL 变 `releases/tag/vX.Y.Z`，Assets 区含 vsix + Source code zip/tar.gz
 
 ### 1.4 常见问题排查
 
@@ -59,8 +63,10 @@ description: "Use when: 需要操作浏览器（市场上传/审核、GitHub Rel
 |------|------|------|
 | 点击无反应/超时 | 微软系页面按钮事件绑定在 React 上 | `page.evaluate(() => 元素.click())` |
 | 找不到元素 | 快照 ref 过期（页面已变） | 重新 `read_page` 获取新 ref |
-| reCAPTCHA 卡住 | 反机器人验证必须真人操作 | 提示用户在 iframe 中完成图片验证 |
+| More Actions 按钮看不到 | 默认隐藏，需悬停行才出现 | 先 `hover_element` 目标行，再点行内 More Actions |
+| reCAPTCHA 卡住 | 反机器人验证必须真人操作 | 提示用户在 iframe 中完成图片验证；Update 流程可能不强制 |
 | 上传失败 | vsix 缺依赖 / 版本号冲突 | 检查 `vsce ls`；市场不能重复上传同版本 |
+| 走错入口 | 用 New extension 发已存在的扩展 | 升级必须走 **More Actions → Update** |
 
 ---
 

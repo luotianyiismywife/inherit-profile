@@ -2,12 +2,12 @@
   "name": "inherit-profile-plus",
   "version": "1.9.4",
   "displayName": "Inherit Profile Plus",
-  "description": "Profile inheritance for VS Code. Community fork with VS Code 1.127+ fixes.",
+  "description": "Profile inheritance for VS Code. Actively maintained, with VS Code 1.127+ fixes.",
   "icon": "branding/icon_128.png",
   "publisher": "luotianyiismywife",
   "repository": {
     "type": "git",
-    "url": "https://github.com/luotianyiismywife/inherit-profile"
+    "url": "https://github.com/luotianyiismywife/inherit-profile-plus"
   },
   "license": "MIT",
   "engines": {
@@ -30,9 +30,9 @@
     "configs",
     "workspace"
   ],
-  "homepage": "https://github.com/luotianyiismywife/inherit-profile#readme",
+  "homepage": "https://github.com/luotianyiismywife/inherit-profile-plus#readme",
   "bugs": {
-    "url": "https://github.com/luotianyiismywife/inherit-profile/issues"
+    "url": "https://github.com/luotianyiismywife/inherit-profile-plus/issues"
   },
   "galleryBanner": {
     "color": "#1e1e1e",
